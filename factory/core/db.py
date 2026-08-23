@@ -58,20 +58,42 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """Explicit write transaction.
-
-    ``BEGIN IMMEDIATE`` takes the write lock upfront. Without it two ticks could
-    both start as readers and deadlock when they try to upgrade — exactly the race
-    the tick lock and the topic claim are meant to survive.
-    """
-    conn.execute("BEGIN IMMEDIATE")
+def _begin(conn: sqlite3.Connection, mode: str) -> Iterator[sqlite3.Connection]:
+    conn.execute(f"BEGIN {mode}")
     try:
         yield conn
     except BaseException:
         conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Transaction that will write. Takes the write lock upfront.
+
+    ``BEGIN IMMEDIATE`` matters: without it two writers would both start as
+    readers and deadlock when they try to upgrade — exactly the race the tick lock
+    and the topic claim have to survive.
+
+    Use this only when the block actually writes. In WAL mode a writer does not
+    block readers, but it does block other writers, so wrapping a read in here
+    would make the comments worker queue behind the main tick for no reason.
+    """
+    with _begin(conn, "IMMEDIATE") as active:
+        yield active
+
+
+@contextmanager
+def read_transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Transaction that only reads: a consistent snapshot across several queries.
+
+    ``BEGIN DEFERRED`` takes no write lock, so this runs in parallel with a writer.
+    A single ``SELECT`` needs no transaction at all — the connection is in
+    autocommit mode.
+    """
+    with _begin(conn, "DEFERRED") as active:
+        yield active
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -114,6 +136,58 @@ def _discover_migrations(directory: Path) -> list[tuple[int, Path]]:
     return sorted(found)
 
 
+def _apply_one(conn: sqlite3.Connection, number: int, path: Path) -> None:
+    """Run a single migration atomically, with foreign keys temporarily off.
+
+    Changing a ``CHECK`` constraint in SQLite means rebuilding the table: create a
+    copy, move the rows, drop the original, rename. With foreign keys enforced,
+    dropping ``posts`` would fail because ``assets`` and friends reference it, and
+    ``PRAGMA foreign_keys`` is a no-op inside a transaction — so it has to be
+    switched off out here, around the transaction rather than inside it.
+
+    ``PRAGMA foreign_key_check`` then runs *before* the commit: a migration that
+    orphans rows is rolled back instead of being discovered later in production.
+    """
+    sql = path.read_text(encoding="utf-8")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        # executescript commits any pending transaction first, so the BEGIN has to
+        # live inside the script. It is left open on purpose: the integrity check
+        # below still has to be able to roll everything back.
+        conn.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {number};")
+
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            conn.execute("ROLLBACK")
+            tables = sorted({row[0] for row in violations})
+            raise DbError(
+                f"Миграция {path.name} нарушила связи между таблицами: {', '.join(tables)}.",
+                why=(
+                    f"После применения нашлось {len(violations)} строк, ссылающихся "
+                    "на несуществующие записи. Изменения отменены."
+                ),
+                what_to_do=(
+                    "База осталась на предыдущей версии и работоспособна. "
+                    "Исправь файл миграции. См. CLAUDE.md → «Как менять схему»."
+                ),
+            )
+        conn.execute("COMMIT")
+    except sqlite3.Error as exc:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise DbError(
+            f"Миграция {path.name} не применилась.",
+            why=str(exc),
+            what_to_do=(
+                "База осталась на предыдущей версии и работоспособна. "
+                "Восстанови файл миграции из репозитория или откатись на "
+                "предыдущую версию образа. См. RUNBOOK.md → «Обслуживание»."
+            ),
+        ) from exc
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def migrate(conn: sqlite3.Connection, directory: Path | None = None) -> int:
     """Apply pending migrations in order. Returns the resulting schema version.
 
@@ -127,22 +201,7 @@ def migrate(conn: sqlite3.Connection, directory: Path | None = None) -> int:
     for number, path in _discover_migrations(target_dir):
         if number <= current:
             continue
-        sql = path.read_text(encoding="utf-8")
-        try:
-            conn.executescript(
-                f"BEGIN;\n{sql}\nPRAGMA user_version = {number};\nCOMMIT;"
-            )
-        except sqlite3.Error as exc:
-            conn.execute("ROLLBACK")
-            raise DbError(
-                f"Миграция {path.name} не применилась.",
-                why=str(exc),
-                what_to_do=(
-                    "База осталась на предыдущей версии и работоспособна. "
-                    "Восстанови файл миграции из репозитория или откатись на "
-                    "предыдущую версию образа. См. RUNBOOK.md → «Обслуживание»."
-                ),
-            ) from exc
+        _apply_one(conn, number, path)
         current = number
 
     return current

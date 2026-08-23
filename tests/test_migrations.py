@@ -121,18 +121,57 @@ def test_one_cover_per_position(conn):
 
 class TestTransactions:
     def test_commit_persists(self, conn):
-        with db.transaction(conn):
+        with db.write_transaction(conn):
             insert_project(conn, "kept")
 
         assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
 
     def test_rollback_on_error_leaves_nothing_behind(self, conn):
         with pytest.raises(ValueError):
-            with db.transaction(conn):
+            with db.write_transaction(conn):
                 insert_project(conn, "discarded")
                 raise ValueError("шаг упал")
 
         assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+
+    def test_read_transaction_sees_a_consistent_snapshot(self, conn):
+        insert_project(conn, "before")
+        other = db.connect()
+        try:
+            with db.read_transaction(conn):
+                first = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+                with db.write_transaction(other):
+                    insert_project(other, "added-midway")
+                second = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        finally:
+            other.close()
+
+        assert first == second == 1
+
+    def test_reader_does_not_block_a_writer(self, conn):
+        """Иначе на Этапе 6 воркер комментариев встанет в очередь за тиком без причины."""
+        other = db.connect()
+        other.execute("PRAGMA busy_timeout = 50")
+        try:
+            with db.read_transaction(conn):
+                conn.execute("SELECT COUNT(*) FROM posts").fetchone()
+                with db.write_transaction(other):
+                    insert_project(other, "written-while-reading")
+        finally:
+            other.close()
+
+        assert conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+
+    def test_writer_blocks_another_writer(self, conn):
+        """Два одновременных писателя — то, от чего защищает BEGIN IMMEDIATE."""
+        other = db.connect()
+        other.execute("PRAGMA busy_timeout = 50")
+        try:
+            with db.write_transaction(conn):
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    other.execute("BEGIN IMMEDIATE")
+        finally:
+            other.close()
 
 
 class TestMigrationDiscovery:
