@@ -131,6 +131,42 @@ class TestEnsureDataDir:
         paths.ensure_data_dir()
         paths.ensure_data_dir()
 
+    def test_parallel_starts_do_not_collide(self, monkeypatch, tmp_path):
+        """В docker compose три сервиса стартуют одновременно на одном томе.
+
+        С общим именем пробного файла они удаляли его друг у друга, и запуск
+        падал с «No such file or directory» — причём не всегда, что хуже всего.
+        """
+        import threading
+
+        monkeypatch.setenv("FACTORY_DATA_DIR", str(tmp_path / "shared"))
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(12)
+
+        def start() -> None:
+            try:
+                barrier.wait(timeout=10)
+                for _ in range(20):
+                    paths.ensure_data_dir()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=start) for _ in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, f"параллельный запуск упал: {errors}"
+
+    def test_probe_file_does_not_stay_behind(self, monkeypatch, tmp_path):
+        target = tmp_path / "data"
+        monkeypatch.setenv("FACTORY_DATA_DIR", str(target))
+
+        paths.ensure_data_dir()
+
+        assert not list(target.glob(".write-probe*")), "пробный файл остался в каталоге данных"
+
     def test_unwritable_parent_gives_advice_not_permission_error(self, monkeypatch, tmp_path):
         """Умолчание /data рассчитано на контейнер; на macOS без sudo оно не создаётся."""
         readonly = tmp_path / "readonly"

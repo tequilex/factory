@@ -11,6 +11,7 @@ change the environment between cases.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from factory.core.errors import FactoryError
@@ -145,11 +146,14 @@ def ensure_data_dir() -> Path:
     into an instruction instead.
     """
     target = data_dir()
-    probe = target / ".write-probe"
+    # Имя пробного файла уникально на процесс и поток: в docker compose три
+    # сервиса стартуют одновременно на одном томе, и общий файл они бы удаляли
+    # друг у друга, роняя запуск с «No such file or directory».
+    probe = target / f".write-probe-{os.getpid()}-{threading.get_ident()}"
     try:
         target.mkdir(parents=True, exist_ok=True)
         probe.touch()
-        probe.unlink()
+        probe.unlink(missing_ok=True)
     except OSError as exc:
         raise FactoryError(
             f"Каталог данных {target} недоступен для записи.",
