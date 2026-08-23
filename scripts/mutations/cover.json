@@ -1,0 +1,58 @@
+{
+  "module": "factory/compose/cover.py",
+  "tests": "tests/test_cover.py",
+  "mutations": {
+    "не подбирать кегль, всегда максимальный": [
+      "    for size in range(high, low - 1, -1):",
+      "    for size in [high]:"
+    ],
+    "подбирать кегль снизу вверх — всегда минимальный": [
+      "    for size in range(high, low - 1, -1):",
+      "    for size in range(low, high + 1):"
+    ],
+    "игнорировать отступы плашки при подборе": [
+      "    available_width = plate[\"width\"] - 2 * padding\n    available_height = plate[\"height\"] - 2 * padding",
+      "    available_width = plate[\"width\"]\n    available_height = plate[\"height\"]"
+    ],
+    "рвать слова посередине": [
+      "        if font.getbbox(candidate)[2] <= available_width:\n            current = candidate\n        else:\n            lines.append(current)\n            current = word",
+      "        current = candidate"
+    ],
+    "не рисовать рамку": [
+      "    for offset in range(thickness):",
+      "    for offset in range(0):"
+    ],
+    "рамка в один пиксель вместо заданной толщины": [
+      "    for offset in range(thickness):",
+      "    for offset in range(1):"
+    ],
+    "не рисовать плашку": [
+      "    draw.rectangle(\n        [plate[\"x\"], plate[\"y\"], plate[\"x\"] + plate[\"width\"], plate[\"y\"] + plate[\"height\"]],\n        fill=parse_colour(plate[\"color\"]),\n    )",
+      "    pass"
+    ],
+    "не рисовать заголовок": [
+    "    if title.strip():",
+    "    if False:"
+    ],
+    "заливать весь холст вместо фона": [
+      "    if image.size != size:\n        image = image.resize(size, Image.LANCZOS)",
+      "    image = Image.new(\"RGB\", size, (0, 0, 0))"
+    ],
+    "не проверять, помещается ли плашка в холст": [
+      "    if not fits:",
+      "    if False:"
+    ],
+    "не проверять обязательные разделы шаблона": [
+      "    if missing:",
+      "    if False:"
+    ],
+    "принимать любой мусор вместо цвета": [
+      "    if len(text) != 6:",
+      "    if False:"
+    ],
+    "сохранять в JPEG вместо PNG": [
+      "    image.save(buffer, format=\"PNG\", optimize=True)",
+      "    image.save(buffer, format=\"JPEG\")"
+    ]
+  }
+}
