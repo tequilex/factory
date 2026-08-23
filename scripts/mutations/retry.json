@@ -23,8 +23,8 @@
       "                    if connection is not None:\n                        record_run(connection, step=step, ok=False, duration_ms=0, post_id=target_post, error=str(exc))\n                    if not _is_retryable(exc) or attempt == attempts:\n                        break"
     ],
     "игнорировать attempts=1 и повторять необратимый шаг": [
-      "            for attempt in range(1, attempts + 1):",
-      "            for attempt in range(1, MAX_ATTEMPTS + 1):"
+      "                    if not _is_retryable(exc) or attempt == attempts:",
+      "                    if not _is_retryable(exc) or attempt == MAX_ATTEMPTS:"
     ],
     "изменить число попыток": [
       "MAX_ATTEMPTS = 3",

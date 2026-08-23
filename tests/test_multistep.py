@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import pytest
 
-from factory.core import db, machine
+from factory.core import db, machine, paths
 from factory.core.clock import from_iso, now_utc, to_iso
 from factory.core.config import load_project
 from factory.core.errors import FactoryError
@@ -316,6 +316,106 @@ class TestTick:
 
         assert summary["projects"] == 1
         assert summary["advanced"] > 0
+
+    def test_unbuildable_provider_does_not_stop_the_others(self, one_post, monkeypatch, tmp_env):
+        """Провайдер, прошедший валидацию, но ещё не реализованный.
+
+        `llm.provider: anthropic` — валидное имя, конфиг грузится, а сборка
+        провайдеров падает. Если она вне общего try, останавливается весь тик:
+        здоровые проекты стоят, хартбит не пишется, и владельцу через два часа
+        приходит «воркер умер» вместо «у проекта X неверный провайдер».
+        """
+        import shutil
+
+        import yaml
+
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        conn = one_post["conn"]
+
+        broken_dir = paths.projects_dir() / "broken"
+        shutil.copytree(paths.projects_dir() / "demo", broken_dir)
+        config_path = broken_dir / "config.yaml"
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        data["slug"] = "broken"
+        data["llm"]["provider"] = "anthropic"
+        config_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+        broken_id = insert_project(conn, "broken")
+        insert_topic(conn, broken_id, "Тема битого проекта")
+        conn.commit()
+
+        summary = machine.tick(conn)
+
+        assert summary["projects"] == 1, "здоровый проект не обработан"
+        assert summary["advanced"] > 0, "здоровый проект не сдвинулся"
+        assert machine.lock.heartbeat_age_sec(conn) is not None, "хартбит не записан"
+
+    def test_running_out_of_topics_warns_once_not_every_tick(self, one_post, monkeypatch, caplog):
+        """144 одинаковые строки в сутки топят совет «смотри WARNING в логах»."""
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+
+        with caplog.at_level("WARNING"):
+            for _ in range(4):
+                machine.tick(one_post["conn"])
+
+        warnings = [r for r in caplog.records if "темы закончились" in r.message]
+        assert len(warnings) == 1, f"предупреждение написано {len(warnings)} раз вместо одного"
+
+    def test_the_warning_can_fire_again_after_the_situation_clears(self, one_post):
+        """Гашение повторов не должно превращаться в «сказали один раз и молчим вечно».
+
+        Проверяется сам механизм: пока состояние прежнее — молчим, сменилось —
+        сообщаем снова.
+        """
+        conn = one_post["conn"]
+
+        assert machine._remember_warning(conn, "проверка", "1") is True
+        assert machine._remember_warning(conn, "проверка", "1") is False
+        assert machine._remember_warning(conn, "проверка", "0") is True
+        assert machine._remember_warning(conn, "проверка", "1") is True
+
+    def test_one_bad_tick_does_not_kill_the_worker(self, one_post, monkeypatch):
+        """Предохранитель, на котором держится сценарий «битый проект».
+
+        Без него любая неожиданная ошибка в тике останавливает воркер насовсем,
+        и система молчит до тех пор, пока кто-нибудь не заметит.
+        """
+        from factory.workers import tick as tick_worker
+
+        calls = {"n": 0}
+
+        def sometimes_explodes(conn):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("неожиданная ошибка в тике")
+            return {"projects": 1, "posts_created": 0, "advanced": 0, "skipped": False}
+
+        monkeypatch.setattr("factory.core.machine.tick", sometimes_explodes)
+        monkeypatch.setenv("FACTORY_TICK_INTERVAL_SEC", "60")
+
+        stopper = tick_worker.Stopper()
+
+        class StopAfterTwo(tick_worker.Stopper):
+            def install(self):
+                pass
+
+            @property
+            def stopped(self):
+                return calls["n"] >= 2
+
+            def wait(self, seconds):
+                return
+
+        tick_worker.run_loop(StopAfterTwo())
+
+        assert calls["n"] >= 2, "воркер остановился на первой же ошибке"
+
+    def test_warning_state_is_kept_per_project(self, one_post):
+        """У двух групп темы кончаются независимо."""
+        conn = one_post["conn"]
+        machine._remember_warning(conn, "topics_exhausted:alpha", "1")
+
+        assert machine._remember_warning(conn, "topics_exhausted:beta", "1") is True
 
     def test_ignore_schedule_warns_on_every_tick(self, one_post, monkeypatch, caplog):
         monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")

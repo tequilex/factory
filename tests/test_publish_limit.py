@@ -32,23 +32,29 @@ def ready_post(conn, demo_project):
     post_id = insert_post(conn, project_id, topic_id, state=State.APPROVED)
     conn.commit()
 
-    def context() -> StepContext:
-        row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
-        return StepContext(
-            conn=conn,
-            project=project,
-            post=Post.from_row(row),
-            providers=build_providers(project),
-            log=get_logger("test"),
-        )
-
-    return {
+    env: dict = {
         "conn": conn,
         "project": project,
         "project_id": project_id,
         "post_id": post_id,
-        "context": context,
     }
+
+    def context() -> StepContext:
+        # Конфиг берётся из env на момент вызова, а не захватывается замыканием:
+        # тесты подменяют env["project"], и захваченная копия молча игнорировала
+        # бы подмену — тест проверял бы совсем не то, что заявляет.
+        current = env["project"]
+        row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+        return StepContext(
+            conn=conn,
+            project=current,
+            post=Post.from_row(row),
+            providers=build_providers(current),
+            log=get_logger("test"),
+        )
+
+    env["context"] = context
+    return env
 
 
 def publish_a_post(conn, project_id, *, at, suffix):
@@ -223,6 +229,66 @@ class TestSchedule:
 
         assert open_slot(project, moment) == time(19, 30)
         assert open_slot(project, moment.astimezone(ZoneInfo("UTC"))) == time(19, 30)
+
+
+class TestSlotAcrossMidnight:
+    """Окно слота не должно обрываться о полночь.
+
+    У слота 23:30 час окна заканчивается в 00:30 следующих суток. Привязка окна
+    только к сегодняшней дате обрезала бы его до 00:00, а для слота 23:55
+    реальное окно составило бы пять минут — один пропущенный тик молча съедал бы
+    дневную публикацию, без ошибки и без роста retry_count.
+    """
+
+    @pytest.fixture
+    def late_night(self, ready_post):
+        project = ready_post["project"]
+        late = project.model_copy(
+            update={"vk": project.vk.model_copy(update={"schedule": ["23:30"]})}
+        )
+        ready_post["project"] = late
+        return ready_post
+
+    @pytest.mark.parametrize(
+        "moment,expected",
+        [
+            (datetime(2026, 8, 23, 23, 31, tzinfo=MOSCOW), time(23, 30)),
+            (datetime(2026, 8, 23, 23, 59, tzinfo=MOSCOW), time(23, 30)),
+            (datetime(2026, 8, 24, 0, 10, tzinfo=MOSCOW), time(23, 30)),
+            (datetime(2026, 8, 24, 0, 29, tzinfo=MOSCOW), time(23, 30)),
+            (datetime(2026, 8, 24, 0, 31, tzinfo=MOSCOW), None),
+            (datetime(2026, 8, 23, 23, 29, tzinfo=MOSCOW), None),
+        ],
+    )
+    def test_window_continues_past_midnight(self, late_night, moment, expected):
+        assert open_slot(late_night["project"], moment) == expected
+
+    def test_a_post_actually_publishes_after_midnight(self, late_night, monkeypatch):
+        monkeypatch.delenv("FACTORY_IGNORE_SCHEDULE", raising=False)
+        monkeypatch.setattr(
+            "factory.core.steps.publish.now_utc",
+            lambda: datetime(2026, 8, 24, 0, 10, tzinfo=MOSCOW),
+        )
+
+        assert run(late_night["context"]()).advanced
+
+    def test_slot_is_still_used_only_once_across_midnight(self, late_night, monkeypatch):
+        monkeypatch.delenv("FACTORY_IGNORE_SCHEDULE", raising=False)
+        monkeypatch.setattr(
+            "factory.core.steps.publish.now_utc",
+            lambda: datetime(2026, 8, 24, 0, 10, tzinfo=MOSCOW),
+        )
+        publish_a_post(
+            late_night["conn"],
+            late_night["project_id"],
+            at=datetime(2026, 8, 23, 23, 40, tzinfo=MOSCOW),
+            suffix=0,
+        )
+
+        result = run(late_night["context"]())
+
+        assert result.outcome is Outcome.WAITING
+        assert "слоте" in result.reason
 
 
 class TestSlotIsUsedOnce:

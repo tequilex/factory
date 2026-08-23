@@ -42,15 +42,58 @@ def worker_env(tmp_path: Path, **extra) -> dict:
     return env
 
 
+# Запускаем воркер напрямую, а не через `uv run`.
+#
+# `uv run` порождает воркер дочерним процессом и остаётся его родителем.
+# SIGKILL переслать нельзя, поэтому os.kill по pid от Popen убивает только uv,
+# а воркер осиротевает и продолжает тикать. Тесты при этом проходят — но не
+# потому, что система возобновляема, а потому, что её никто не убивал; заодно
+# каждый прогон оставлял в системе бессмертные процессы.
+FACTORY_BIN = REPO_ROOT / ".venv" / "bin" / "factory"
+
+
 def factory(*args, env, timeout=90) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["uv", "run", "factory", *args],
+        [str(FACTORY_BIN), *args],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
         timeout=timeout,
     )
+
+
+def start_worker(env) -> subprocess.Popen:
+    """Запускает воркер в отдельной группе процессов, чтобы его можно было убить."""
+    return subprocess.Popen(
+        [str(FACTORY_BIN), "run", "--loop"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def kill_worker(worker: subprocess.Popen) -> None:
+    """Убивает всю группу процессов воркера — SIGKILL по одному pid не наследуется."""
+    try:
+        os.killpg(os.getpgid(worker.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    worker.wait(timeout=30)
+
+
+@pytest.fixture(autouse=True)
+def no_stray_workers():
+    """Добивает всё, что тест мог оставить.
+
+    Осиротевший воркер продолжает писать в ту же базу, из-за чего следующий тест
+    проверяет не то, что думает, а integrity_check идёт по базе, в которую прямо
+    сейчас пишут.
+    """
+    yield
+    subprocess.run(["pkill", "-9", "-f", "factory run --loop"], capture_output=True)
 
 
 def open_worker_db(env) -> sqlite3.Connection:
@@ -92,17 +135,9 @@ class TestKillMinusNine:
         assert before, "первый тик не создал ни одного поста"
         assert all(state != State.QUEUED for state in before.values())
 
-        worker = subprocess.Popen(
-            ["uv", "run", "factory", "run", "--loop"],
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        worker = start_worker(env)
         time.sleep(6)
-        os.kill(worker.pid, signal.SIGKILL)
-        worker.wait(timeout=30)
+        kill_worker(worker)
 
         assert worker.returncode == -signal.SIGKILL
 
@@ -122,16 +157,9 @@ class TestKillMinusNine:
     def test_database_is_not_corrupted_by_the_kill(self, workspace):
         """WAL обязан пережить SIGKILL — иначе теряется вся идея лёгкой миграции."""
         env = workspace["env"]
-        worker = subprocess.Popen(
-            ["uv", "run", "factory", "run", "--loop"],
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        worker = start_worker(env)
         time.sleep(5)
-        os.kill(worker.pid, signal.SIGKILL)
-        worker.wait(timeout=30)
+        kill_worker(worker)
 
         conn = open_worker_db(env)
         result = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -142,16 +170,9 @@ class TestKillMinusNine:
     def test_stale_lock_after_a_kill_is_taken_over(self, workspace):
         """Иначе после аварии система стоит до истечения TTL и никто не понимает почему."""
         env = workspace["env"]
-        worker = subprocess.Popen(
-            ["uv", "run", "factory", "run", "--loop"],
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        worker = start_worker(env)
         time.sleep(4)
-        os.kill(worker.pid, signal.SIGKILL)
-        worker.wait(timeout=30)
+        kill_worker(worker)
 
         time.sleep(3)
         result = factory("run", "--once", env=env)
@@ -162,13 +183,7 @@ class TestKillMinusNine:
     def test_sigterm_stops_cleanly_and_releases_the_lock(self, workspace):
         """docker stop шлёт SIGTERM: воркер обязан доработать тик и отпустить блокировку."""
         env = workspace["env"]
-        worker = subprocess.Popen(
-            ["uv", "run", "factory", "run", "--loop"],
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        worker = start_worker(env)
         time.sleep(5)
         worker.terminate()
         worker.wait(timeout=60)
@@ -221,18 +236,64 @@ class TestPaidWorkIsNotRepeated:
 
         assert checked, "все посты успели опубликоваться, проверять было нечего"
 
-    def test_a_published_post_is_never_published_twice(self, workspace):
-        """Дубль поста в группе недопустим — проверяем на многих прогонах."""
+    def test_the_publisher_is_called_once_per_post(self, workspace):
+        """Дубль поста в группе недопустим.
+
+        Считаются вызовы публикатора, а не разные external_id: у заглушки
+        external_id = stub_{post_id} уникален по построению, поэтому группировка
+        по нему была бы истинна при любой реализации — в том числе при снятой
+        проверке `external_id IS NULL`. Реальный след публикации — строка в
+        `runs` со step='approved' и ok=1, и файл, который пишет заглушка.
+        """
         env = workspace["env"]
         for _ in range(10):
             factory("run", "--once", env=env)
 
         conn = open_worker_db(env)
         published = conn.execute(
-            "SELECT external_id, COUNT(*) AS n FROM posts WHERE external_id IS NOT NULL "
-            "GROUP BY external_id"
+            "SELECT id FROM posts WHERE external_id IS NOT NULL ORDER BY id"
+        ).fetchall()
+        calls = conn.execute(
+            "SELECT post_id, COUNT(*) AS n FROM runs WHERE step = 'approved' AND ok = 1 "
+            "GROUP BY post_id"
         ).fetchall()
         conn.close()
 
         assert published, "за десять тиков ничего не опубликовалось"
-        assert all(row["n"] == 1 for row in published), "один и тот же пост опубликован дважды"
+
+        by_post = {row["post_id"]: row["n"] for row in calls}
+        for row in published:
+            assert by_post.get(row["id"], 0) == 1, (
+                f"пост {row['id']} прошёл шаг публикации {by_post.get(row['id'])} раз"
+            )
+
+    def test_published_at_never_moves(self, workspace):
+        """Вторая публикация переписала бы published_at — значит, он и есть свидетель."""
+        env = workspace["env"]
+        for _ in range(4):
+            factory("run", "--once", env=env)
+
+        conn = open_worker_db(env)
+        before = {
+            row["id"]: row["published_at"]
+            for row in conn.execute(
+                "SELECT id, published_at FROM posts WHERE published_at IS NOT NULL"
+            ).fetchall()
+        }
+        conn.close()
+        assert before, "за четыре тика ничего не опубликовалось"
+
+        for _ in range(6):
+            factory("run", "--once", env=env)
+
+        conn = open_worker_db(env)
+        after = {
+            row["id"]: row["published_at"]
+            for row in conn.execute(
+                "SELECT id, published_at FROM posts WHERE published_at IS NOT NULL"
+            ).fetchall()
+        }
+        conn.close()
+
+        for post_id, stamp in before.items():
+            assert after[post_id] == stamp, f"пост {post_id} опубликован повторно"

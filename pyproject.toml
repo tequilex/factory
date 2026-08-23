@@ -12,7 +12,9 @@ dependencies = [
 ]
 
 [project.scripts]
-factory = "factory.cli:app"
+# Именно cli, а не app: cli() ловит FactoryError и печатает три части вместо
+# трейсбека. Через app эта обёртка не выполняется вовсе.
+factory = "factory.cli:cli"
 
 [dependency-groups]
 dev = [

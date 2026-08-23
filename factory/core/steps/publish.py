@@ -58,13 +58,31 @@ def published_today(conn: sqlite3.Connection, project: ProjectConfig, project_id
     return sum(1 for row in rows if from_iso(row["published_at"]).astimezone(project.vk.tz).date() == today)
 
 
+def _slot_start(local: datetime, slot: time, day_offset: int = 0) -> datetime:
+    """Момент открытия слота на сутках, сдвинутых на ``day_offset`` дней.
+
+    Считается через дату, а не через ``replace``: у слота 23:30 окно в час
+    заканчивается уже в следующих сутках, и привязка только к сегодняшней дате
+    обрезала бы его до полуночи. Для 23:55 «реальное» окно оказалось бы пятью
+    минутами, и один пропущенный тик молча съедал бы дневную публикацию.
+    """
+    day = (local + timedelta(days=day_offset)).date()
+    naive = datetime.combine(day, slot)
+    # localize через tzinfo самого local: так переход на летнее время не сдвигает
+    # окно на час.
+    return naive.replace(tzinfo=local.tzinfo)
+
+
 def open_slot(project: ProjectConfig, moment: datetime) -> time | None:
     """The schedule slot the given moment falls into, if any."""
     local = moment.astimezone(project.vk.tz)
     for slot in project.vk.slots:
-        start = local.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
-        if start <= local < start + timedelta(minutes=SLOT_WINDOW_MIN):
-            return slot
+        # -1 нужен для слотов, чьё окно перешагнуло полночь: в 00:10 открыт
+        # вчерашний слот 23:30, а не сегодняшний.
+        for day_offset in (0, -1):
+            start = _slot_start(local, slot, day_offset)
+            if start <= local < start + timedelta(minutes=SLOT_WINDOW_MIN):
+                return slot
     return None
 
 
@@ -78,7 +96,11 @@ def slot_already_used(
     later time the owner actually chose.
     """
     local = moment.astimezone(project.vk.tz)
-    start = local.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
+    # То же окно, что нашёл open_slot: со сдвигом на сутки назад, если полночь
+    # уже пройдена.
+    start = _slot_start(local, slot)
+    if start > local:
+        start = _slot_start(local, slot, -1)
     end = start + timedelta(minutes=SLOT_WINDOW_MIN)
 
     rows = conn.execute(

@@ -177,6 +177,58 @@ class TestFactcheck:
 
         assert pipeline["providers"].llm.calls == before
 
+    def test_verdict_fixed_replaces_the_body(self, pipeline):
+        """SPEC: «fixed → заменяем body». Заглушка всегда отвечает ok, поэтому
+        правило не проверялось ничем — а на Этапе 3 провайдер начнёт возвращать
+        fixed по-настоящему."""
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        original = post_row(pipeline["conn"], pipeline["post_id"])["body"]
+        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+            verdict="fixed",
+            corrected_body="Исправленный текст с верными датами.",
+            notes="поправлен год",
+        )
+
+        result, _ = pipeline["run"](State.TEXT_READY)
+
+        row = post_row(pipeline["conn"], pipeline["post_id"])
+        assert result.advanced
+        assert row["body"] == "Исправленный текст с верными датами."
+        assert row["body"] != original
+        assert row["factcheck_verdict"] == "fixed"
+
+    def test_verdict_fixed_without_a_body_keeps_the_original(self, pipeline):
+        """Провайдер сказал «исправил», но текста не дал — терять исходный нельзя."""
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        original = post_row(pipeline["conn"], pipeline["post_id"])["body"]
+        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+            verdict="fixed", corrected_body=None
+        )
+
+        pipeline["run"](State.TEXT_READY)
+
+        assert post_row(pipeline["conn"], pipeline["post_id"])["body"] == original
+
+    def test_uncertain_verdict_is_stored_with_its_notes(self, pipeline):
+        """SPEC требует показать «⚠️ фактчек не уверен: {notes}» — значит, notes надо хранить."""
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+            verdict="uncertain", notes="не нашёл подтверждения по дате основания"
+        )
+
+        result, _ = pipeline["run"](State.TEXT_READY)
+
+        row = post_row(pipeline["conn"], pipeline["post_id"])
+        assert result.advanced, "неуверенный фактчек не должен останавливать пост"
+        assert row["factcheck_verdict"] == "uncertain"
+        assert row["factcheck_notes"] == "не нашёл подтверждения по дате основания"
+
 
 class TestPrompts:
     def test_creates_one_cover_and_the_configured_inlines(self, pipeline):
@@ -203,11 +255,49 @@ class TestPrompts:
         for row in assets_of(pipeline["conn"], pipeline["post_id"]):
             assert row["prompt"].endswith(pipeline["project"].image.scene_style)
 
-    def test_every_asset_gets_a_seed(self, pipeline):
+    def test_every_asset_gets_its_own_seed(self, pipeline):
+        """Одинаковый seed у всех означал бы четыре одинаковые картинки."""
         pipeline["advance_through"](State.QUEUED, State.TEXT_READY)
         pipeline["run"](State.FACTCHECKED)
 
-        assert all(row["seed"] for row in assets_of(pipeline["conn"], pipeline["post_id"]))
+        seeds = [row["seed"] for row in assets_of(pipeline["conn"], pipeline["post_id"])]
+
+        assert all(seeds)
+        assert len(set(seeds)) == len(seeds), f"seed повторяются: {seeds}"
+
+    def test_inline_count_from_the_config_is_respected(self, pipeline):
+        """Число картинок задаёт конфиг, а не то, сколько сцен вернул провайдер.
+
+        Сверять длину с тем же inline_count бессмысленно: заглушка всегда даёт
+        ровно столько, сколько нужно, и обрезка не проверяется. Здесь провайдер
+        нарочно возвращает больше сцен, чем просили.
+        """
+        from factory.providers.base import ScenePrompts
+
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY)
+        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: ScenePrompts(
+            cover="a portrait", inline=[f"scene {i}" for i in range(9)]
+        )
+
+        pipeline["run"](State.FACTCHECKED)
+
+        rows = assets_of(pipeline["conn"], pipeline["post_id"])
+        assert len(rows) == 4, "обрезка по inline_count не сработала"
+        assert sum(1 for row in rows if row["kind"] == "inline") == 3
+
+    def test_fewer_scenes_than_requested_does_not_crash(self, pipeline):
+        """Провайдер вернул меньше сцен, чем просили — пост должен доехать."""
+        from factory.providers.base import ScenePrompts
+
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY)
+        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: ScenePrompts(
+            cover="a portrait", inline=["only one scene"]
+        )
+
+        result, _ = pipeline["run"](State.FACTCHECKED)
+
+        assert result.advanced
+        assert len(assets_of(pipeline["conn"], pipeline["post_id"])) == 2
 
     def test_repeat_run_does_not_duplicate_assets(self, pipeline):
         pipeline["advance_through"](State.QUEUED, State.TEXT_READY)
@@ -457,6 +547,22 @@ class TestCompose:
         with pytest.raises(FactoryError) as excinfo:
             pipeline["run"](State.IMAGES_READY)
 
+        assert "factory post retry" in str(excinfo.value)
+
+    def test_no_cover_row_at_all_is_reported_understandably(self, pipeline):
+        """Без этой ветки будет TypeError вместо инструкции."""
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        with db.write_transaction(pipeline["conn"]):
+            pipeline["conn"].execute(
+                "DELETE FROM assets WHERE post_id = ? AND kind = 'cover'", (pipeline["post_id"],)
+            )
+
+        with pytest.raises(FactoryError) as excinfo:
+            pipeline["run"](State.IMAGES_READY)
+
+        assert "нет обложки" in str(excinfo.value)
         assert "factory post retry" in str(excinfo.value)
 
     def test_missing_title_is_reported_understandably(self, pipeline):

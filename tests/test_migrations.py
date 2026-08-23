@@ -44,6 +44,25 @@ def test_wal_mode_is_on(conn):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
 
+def test_foreign_keys_pragma_is_actually_enabled(conn):
+    """SQLite выключает внешние ключи по умолчанию — включение легко потерять.
+
+    Без него осиротевшие строки в assets и runs копились бы молча, а тесты,
+    проверяющие связи, продолжали бы проходить.
+    """
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_busy_timeout_is_set(conn):
+    """Иначе второй писатель падает мгновенно вместо того, чтобы подождать."""
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == db.BUSY_TIMEOUT_MS
+
+
+def test_synchronous_is_normal(conn):
+    """NORMAL в паре с WAL: безопасно при kill -9 и щадяще к SD-карте."""
+    assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+
+
 def test_foreign_keys_are_enforced(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(

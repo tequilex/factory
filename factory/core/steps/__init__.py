@@ -95,7 +95,12 @@ def handler_for(state: str) -> Handler:
 
 # The registry and the transition map describe the same machine from two sides.
 # Checked at import so a mismatch fails on startup, not on a post in production.
-assert set(REGISTRY) == set(TRANSITIONS), (
-    "реестр шагов и карта переходов разошлись: "
-    f"{set(REGISTRY) ^ set(TRANSITIONS)}"
-)
+#
+# Deliberately not an `assert`: those vanish under `python -O`, and this is the
+# only thing standing between a typo and a post that silently never moves.
+if set(REGISTRY) != set(TRANSITIONS):
+    raise FactoryError(
+        "Реестр шагов и карта переходов разошлись.",
+        why=f"Состояния без пары: {sorted(set(REGISTRY) ^ set(TRANSITIONS))}.",
+        what_to_do="См. CLAUDE.md → «Как добавить шаг пайплайна».",
+    )

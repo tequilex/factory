@@ -194,6 +194,68 @@ class TestRetries:
         assert len(attempts) == 1
 
 
+class TestAttemptsLimit:
+    """Необратимые операции не повторяются вовсе.
+
+    Таймаут на публикации не значит «не опубликовалось»: ВК мог создать пост и
+    не успеть ответить. Повтор положил бы в стену второй такой же, поэтому шаг
+    публикации оборачивается с attempts=1.
+    """
+
+    def test_attempts_one_calls_the_function_exactly_once(self, conn):
+        sleeper = Recorder()
+        calls = []
+
+        @tracked_call("approved", conn=conn, attempts=1, sleep=sleeper)
+        def publish():
+            calls.append(1)
+            raise httpx.ReadTimeout("ответ не доехал")
+
+        with pytest.raises(httpx.ReadTimeout):
+            publish()
+
+        assert len(calls) == 1
+        assert sleeper.delays == [], "перед несуществующим повтором была пауза"
+
+    def test_attempts_one_still_records_the_failure(self, conn):
+        @tracked_call("approved", conn=conn, attempts=1)
+        def publish():
+            raise httpx.ReadTimeout("ответ не доехал")
+
+        with pytest.raises(httpx.ReadTimeout):
+            publish()
+
+        (row,) = runs(conn)
+        assert row["ok"] == 0
+        assert "ReadTimeout" in row["error"]
+
+    def test_default_is_still_three(self, conn):
+        """Обычные шаги повторяются: у них ретрай безопасен."""
+        sleeper = Recorder()
+        calls = []
+
+        @tracked_call("text_ready", conn=conn, sleep=sleeper)
+        def fetch():
+            calls.append(1)
+            raise httpx.ConnectError("недоступен")
+
+        with pytest.raises(httpx.ConnectError):
+            fetch()
+
+        assert len(calls) == 3
+
+    def test_publish_step_is_wrapped_with_attempts_one(self):
+        """Проверяем сам шаг: параметр легко потерять при правке декоратора."""
+        import inspect
+
+        from factory.core.steps import publish
+
+        source = inspect.getsource(publish)
+        assert "@tracked_call(State.APPROVED, attempts=1)" in source, (
+            "с шага публикации сняли ограничение на одну попытку"
+        )
+
+
 class TestRetryAfter:
     def test_header_overrides_our_own_backoff(self, conn):
         sleeper = Recorder()

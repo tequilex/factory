@@ -5,6 +5,9 @@
 возврата, понятный текст, отсутствие трейсбеков.
 """
 
+from datetime import timedelta
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -355,6 +358,52 @@ class TestPost:
         assert row["retry_count"] == 0
         assert row["last_error"] is None
 
+    def test_retry_clears_the_pause_so_the_post_runs_now(self, ready):
+        """RUNBOOK обещает «пост поедет со следующего прохода», а не через час."""
+        conn = db.open_db()
+        post_id = insert_post(conn, 1, 1, state=State.TEXT_READY, idem_key="demo:1:9")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET retry_count = 3, next_attempt_at = ? WHERE id = ?",
+                (to_iso(now_utc() + timedelta(hours=6)), post_id),
+            )
+        conn.close()
+
+        run("post", "retry", str(post_id))
+
+        conn = db.open_db()
+        row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+        conn.close()
+        assert row["next_attempt_at"] is None, "пауза не снята, пост будет ждать дальше"
+
+    def test_show_warns_about_an_uncertain_factcheck(self, ready):
+        """SPEC требует показывать «⚠️ фактчек не уверен: {notes}»."""
+        conn = db.open_db()
+        post_id = insert_post(conn, 1, 1, state=State.IN_REVIEW, idem_key="demo:1:9")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET factcheck_verdict = 'uncertain', factcheck_notes = ? "
+                "WHERE id = ?",
+                ("не нашёл подтверждения по дате", post_id),
+            )
+        conn.close()
+
+        result = run("post", "show", str(post_id))
+
+        assert "фактчек не уверен" in result.output
+        assert "не нашёл подтверждения по дате" in result.output
+
+    def test_show_says_nothing_about_factcheck_when_it_was_fine(self, ready):
+        conn = db.open_db()
+        post_id = insert_post(conn, 1, 1, idem_key="demo:1:9")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET factcheck_verdict = 'ok' WHERE id = ?", (post_id,)
+            )
+        conn.close()
+
+        assert "фактчек не уверен" not in run("post", "show", str(post_id)).output
+
     def test_retry_returns_a_failed_post_to_the_start(self, ready):
         conn = db.open_db()
         post_id = insert_post(conn, 1, 1, state=State.FAILED, idem_key="demo:1:9")
@@ -464,6 +513,66 @@ class TestDoctor:
         assert_no_traceback(result)
 
 
+class TestEntryPoint:
+    """Установленная команда `factory` должна вести себя как в тестах.
+
+    Тесты вызывают `app` напрямую, а установленная команда — то, что записано в
+    [project.scripts]. Если там `app`, то обёртка `cli()`, превращающая ошибку в
+    три части, не выполняется вовсе, и владелец видит трейсбек. Проверять это
+    можно только запуском настоящего исполняемого файла.
+    """
+
+    @staticmethod
+    def factory_bin() -> Path:
+        return Path(__file__).resolve().parent.parent / ".venv" / "bin" / "factory"
+
+    def test_console_script_points_at_the_error_handling_wrapper(self):
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        scripts = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["scripts"]
+
+        assert scripts["factory"] == "factory.cli:cli", (
+            "точка входа должна вести на cli(), иначе ошибки печатаются трейсбеком"
+        )
+
+    @pytest.mark.parametrize("mode", ["--once", "--loop"])
+    def test_broken_environment_gives_advice_not_a_traceback(self, tmp_path, mode):
+        """`--loop` — основной способ запуска по RUNBOOK, и он ошибался громче всех."""
+        import os
+        import subprocess
+
+        readonly = tmp_path / "readonly"
+        readonly.mkdir()
+        readonly.chmod(0o500)
+
+        env = dict(os.environ)
+        env.update(
+            {
+                # Каталог, который оба режима трогают при открытии базы.
+                "FACTORY_DATA_DIR": str(readonly / "data"),
+                "FACTORY_PROJECTS_DIR": str(tmp_path / "projects"),
+            }
+        )
+        try:
+            result = subprocess.run(
+                [str(self.factory_bin()), "run", mode],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+            )
+        finally:
+            readonly.chmod(0o700)
+
+        output = result.stdout + result.stderr
+
+        assert result.returncode == 1
+        assert "Traceback" not in output, "пользователь увидел трейсбек вместо инструкции"
+        assert "export FACTORY_DATA_DIR=" in output
+        assert "Что делать:" in output
+
+
 class TestStats:
     def test_shows_states_and_money(self, ready, monkeypatch):
         monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
@@ -473,7 +582,56 @@ class TestStats:
 
         assert result.exit_code == 0
         assert "Посты по состояниям" in result.output
-        assert "Потрачено всего" in result.output
+        assert "Потрачено" in result.output
+
+    def test_days_actually_limits_the_period(self, ready, monkeypatch):
+        """Иначе `--days` — украшение: команда обещает период и игнорирует его."""
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        run("run", "--once")
+        conn = db.open_db()
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET created_at = ?",
+                (to_iso(now_utc() - timedelta(days=40)),),
+            )
+        conn.close()
+
+        recent = run("stats", "demo", "--days", "7")
+        wide = run("stats", "demo", "--days", "90")
+
+        assert "постов не создавалось" in recent.output
+        assert "постов не создавалось" not in wide.output
+
+    def test_money_is_counted_per_project(self, ready, monkeypatch):
+        """Сумма по всем группам вместо одной выглядит достоверной, будучи неверной."""
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        run("run", "--once")
+
+        conn = db.open_db()
+        other_id = insert_project(conn, "other")
+        topic_id = insert_topic(conn, other_id, "Чужая тема")
+        other_post = insert_post(conn, other_id, topic_id, idem_key="other:1:0")
+        with db.write_transaction(conn):
+            conn.execute(
+                "INSERT INTO runs (post_id, step, ok, duration_ms, cost_usd, created_at) "
+                "VALUES (?, 'queued', 1, 10, 9.99, ?)",
+                (other_post, to_iso(now_utc())),
+            )
+        conn.close()
+
+        result = run("stats", "demo")
+
+        assert "9.99" not in result.output, "в статистику demo попали расходы другого проекта"
+
+    def test_zero_days_is_refused_with_advice(self, ready):
+        result = run("stats", "demo", "--days", "0")
+
+        assert result.exit_code == 1
+        assert "factory stats demo --days 7" in result.output
+
+    def test_scope_is_stated_in_the_output(self, ready):
+        assert "проект demo" in run("stats", "demo").output
+        assert "все проекты" in run("stats").output
 
 
 class TestHelp:

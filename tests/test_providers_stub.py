@@ -164,14 +164,44 @@ class TestStubLLM:
         assert StubLLM().complete("система", "напиши что-нибудь", schema=PostDraft).title
 
     def test_no_niche_specific_content_is_baked_in(self):
-        """В providers/ не должно быть ничего про конкретную тематику сообщества."""
+        """В core/ и providers/ не должно быть ничего про тематику сообщества.
+
+        Сторож грубый: он ловит русские существительные в строковых литералах, а
+        не понимает смысл. Кулинарную или медицинскую специфику он поймает по
+        тому же принципу — длинные русские слова внутри кавычек в providers/
+        почти всегда означают протёкшую тематику, — но гарантией это не является.
+        Настоящая проверка — пункт 5 чеклиста самокритики в CLAUDE.md.
+        """
+        import re
         from pathlib import Path
 
-        source = Path(StubLLM.__module__.replace(".", "/") + ".py")
-        text = (Path(__file__).resolve().parent.parent / source).read_text(encoding="utf-8")
+        package = Path(__file__).resolve().parent.parent / "factory"
+        literal = re.compile(r'"[^"]*"|\'[^\']*\'')
+        russian_word = re.compile(r"[а-яё\-]+", re.IGNORECASE)
 
-        for marker in ["шин", "машин", "светофор", "бензин", "двигател", "автомоб"]:
-            assert marker not in text.lower(), f"в заглушке зашита тематика: «{marker}»"
+        # Корни слов из разных ниш. Сравнение идёт по началу слова, а не по
+        # подстроке: иначе «стейт-машине» ловилось бы корнем «шин».
+        niche_stems = (
+            "шин", "светофор", "бензин", "двигател", "автомоб", "багажник",
+            "рецепт", "блюд", "духовк", "диагноз", "симптом", "лекарств",
+            "тренировк", "гантел",
+        )
+
+        offenders: list[str] = []
+        for path in sorted(package.rglob("*.py")):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                for chunk in literal.findall(line):
+                    for word in russian_word.findall(chunk):
+                        # «стейт-машине» разбивается на части по дефису.
+                        for part in word.lower().split("-"):
+                            if part.startswith(niche_stems):
+                                offenders.append(
+                                    f"{path.relative_to(package)}:{lineno} «{word}»"
+                                )
+
+        assert not offenders, "в код протекла тематика ниши: " + "; ".join(offenders)
 
     def test_plain_text_without_a_schema(self):
         assert isinstance(StubLLM().complete("система", "привет"), str)

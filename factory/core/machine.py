@@ -130,17 +130,44 @@ def create_post_for_next_topic(conn: sqlite3.Connection, project: Project) -> in
     return post_id
 
 
+def _remember_warning(conn: sqlite3.Connection, key: str, value: str) -> bool:
+    """Записывает состояние и говорит, изменилось ли оно с прошлого раза.
+
+    Нужно, чтобы предупреждение писалось на смене состояния, а не каждый тик.
+    Раз в десять минут вечно — это 144 строки в сутки на проект, и совет из
+    RUNBOOK «смотри WARNING и ERROR в логах» перестаёт работать.
+    """
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    if row is not None and row["value"] == value:
+        return False
+
+    with db.write_transaction(conn):
+        conn.execute(lock.UPSERT_META, (key, value, to_iso(now_utc())))
+    return True
+
+
 def replenish_queue(conn: sqlite3.Connection, project: Project, config: ProjectConfig) -> int:
     """Create posts until the buffer is full. Returns how many were created."""
     created = 0
+    ran_out = False
+
     while in_flight(conn, project.id) < config.limits.queue_buffer:
         if create_post_for_next_topic(conn, project) is None:
-            log.warning(
-                "свободные темы закончились",
-                extra={"project": project.slug, "in_flight": in_flight(conn, project.id)},
-            )
+            ran_out = True
             break
         created += 1
+
+    state_key = f"topics_exhausted:{project.slug}"
+    if _remember_warning(conn, state_key, "1" if ran_out else "0") and ran_out:
+        log.warning(
+            "свободные темы закончились",
+            extra={
+                "project": project.slug,
+                "in_flight": in_flight(conn, project.id),
+                "what_to_do": f"factory topics import {project.slug} <файл>",
+            },
+        )
+
     return created
 
 
@@ -285,12 +312,17 @@ def tick(conn: sqlite3.Connection) -> dict:
         for project in active_projects(conn):
             try:
                 config = load_project(project.slug)
+                # build_providers must be inside the same guard: a provider name
+                # that is valid but not yet implemented raises here, and outside
+                # the guard that would abort the whole tick — every other project
+                # would stop, and the heartbeat below would never be written, so
+                # the owner would be told "the worker is dead" instead of "this
+                # project has a bad provider".
+                providers = build_providers(config)
             except FactoryError as exc:
-                # One broken config must not stop the other projects.
                 log.error("проект пропущен", extra={"project": project.slug, "error": str(exc)})
                 continue
 
-            providers = build_providers(config)
             summary["projects"] += 1
             summary["posts_created"] += replenish_queue(conn, project, config)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import typer
@@ -184,7 +185,12 @@ def run(
 
     if loop:
         setup_logging("INFO")
-        tick_worker.run_loop()
+        try:
+            tick_worker.run_loop()
+        except FactoryError as exc:
+            # Основной способ запуска по RUNBOOK. Ошибка окружения тут особенно
+            # вероятна — и трейсбек вместо инструкции тут особенно бесполезен.
+            fail(exc)
         return
 
     try:
@@ -513,30 +519,74 @@ def stats(
     days: int = typer.Option(30, help="За сколько последних дней считать."),
 ) -> None:
     """Показать, что происходило: посты, ошибки, потраченные деньги."""
+    if days < 1:
+        fail(
+            FactoryError(
+                f"Период должен быть не меньше одного дня, указано {days}.",
+                why="За нулевой или отрицательный период считать нечего.",
+                what_to_do="Например: factory stats demo --days 7",
+            )
+        )
+
     conn = open_database()
-    since = to_iso(now_utc().replace(microsecond=0)) if days <= 0 else None
-    params: list = []
-    where = ""
+    since = to_iso(now_utc() - timedelta(days=days))
+
+    # Фильтр по проекту применяется ко ВСЕМ числам, а не только к разбивке по
+    # состояниям: иначе «потрачено» показывает сумму по всем группам, и цифра
+    # выглядит достоверной, будучи неверной.
+    post_filter = ""
+    post_params: list = [since]
     if slug:
         project = project_row(conn, slug)
-        where = " WHERE project_id = ?"
-        params = [project.id]
+        post_filter = " AND project_id = ?"
+        post_params.append(project.id)
 
     by_state = conn.execute(
-        f"SELECT state, COUNT(*) AS n FROM posts{where} GROUP BY state ORDER BY n DESC", params
+        f"SELECT state, COUNT(*) AS n FROM posts WHERE created_at >= ?{post_filter} "
+        "GROUP BY state ORDER BY n DESC",
+        post_params,
     ).fetchall()
-    spent = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM runs").fetchone()[0]
-    failures = conn.execute("SELECT COUNT(*) FROM runs WHERE ok = 0").fetchone()[0]
+
+    run_filter = ""
+    run_params: list = [since]
+    if slug:
+        run_filter = " AND (post_id IS NULL OR post_id IN (SELECT id FROM posts WHERE project_id = ?))"
+        run_params.append(project.id)
+
+    spent = conn.execute(
+        f"SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE created_at >= ?{run_filter}", run_params
+    ).fetchone()[0]
+    failures = conn.execute(
+        f"SELECT COUNT(*) FROM runs WHERE ok = 0 AND created_at >= ?{run_filter}", run_params
+    ).fetchone()[0]
+
+    rejection_filter = ""
+    rejection_params: list = [since]
+    if slug:
+        rejection_filter = " AND post_id IN (SELECT id FROM posts WHERE project_id = ?)"
+        rejection_params.append(project.id)
+
     rejections = conn.execute(
-        "SELECT reason, COUNT(*) AS n FROM rejections GROUP BY reason"
+        f"SELECT reason, COUNT(*) AS n FROM rejections WHERE created_at >= ?{rejection_filter} "
+        "GROUP BY reason",
+        rejection_params,
     ).fetchall()
+    published = conn.execute(
+        f"SELECT COUNT(*) FROM posts WHERE published_at >= ?{post_filter}", post_params
+    ).fetchone()[0]
     conn.close()
 
+    scope = f"проект {slug}" if slug else "все проекты"
+    typer.echo(f"За последние {days} дней, {scope}:\n")
     typer.echo("Посты по состояниям:")
     for row in by_state:
         typer.echo(f"  {row['state']:14} {row['n']}")
-    typer.echo(f"\nНеудачных вызовов: {failures}")
-    typer.echo(f"Потрачено всего:   ${spent:.4f}")
+    if not by_state:
+        typer.echo("  (за этот период постов не создавалось)")
+
+    typer.echo(f"\nОпубликовано:      {published}")
+    typer.echo(f"Неудачных вызовов: {failures}")
+    typer.echo(f"Потрачено:         ${spent:.4f}")
     if rejections:
         typer.echo("Отклонено:")
         for row in rejections:
