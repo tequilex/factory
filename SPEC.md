@@ -35,8 +35,14 @@ RAM, данные на USB-SSD), но НИЧЕГО специфичного дл
 | `FACTORY_TMP_DIR` | `/tmp/factory`       | временные картинки               |
 | `FACTORY_PROJECTS_DIR` | `/app/projects` | конфиги проектов                 |
 | `FACTORY_MAX_PARALLEL_IMAGES` | `1`      | параллельных генераций картинок  |
+| `FACTORY_MAX_STEPS_PER_TICK`  | `3`      | шагов, которые пост проезжает за тик |
 | `FACTORY_TICK_INTERVAL_SEC`   | `600`    | период тика                      |
+| `FACTORY_LOCK_TTL_SEC`        | `1800`   | TTL блокировки тика              |
+| `FACTORY_IGNORE_SCHEDULE`     | `0`      | только разработка: игнорировать расписание |
 | `HTTP_PROXY` / `HTTPS_PROXY`  | пусто    | общий прокси                     |
+
+При `FACTORY_IGNORE_SCHEDULE=1` на каждом тике писать WARNING в лог. Иначе
+переменная однажды уедет в боевой конфиг, и посты полетят ночью.
 
 `FACTORY_MAX_PARALLEL_IMAGES=1` на Pi, `4` на нормальном сервере. Код должен
 корректно работать при любом значении.
@@ -159,7 +165,7 @@ CREATE TABLE posts (
     id            INTEGER PRIMARY KEY,
     project_id    INTEGER NOT NULL REFERENCES projects(id),
     topic_id      INTEGER NOT NULL REFERENCES topics(id),
-    idem_key      TEXT UNIQUE NOT NULL,        -- f"{project_slug}:{topic_id}"
+    idem_key      TEXT UNIQUE NOT NULL,        -- f"{slug}:{topic_id}:{attempt}"
     state         TEXT NOT NULL DEFAULT 'queued',
     title         TEXT,                         -- заголовок для обложки
     body          TEXT,                         -- текст поста
@@ -215,8 +221,14 @@ CREATE TABLE rejections (
 );
 ```
 
-`idem_key` — критично. Перед публикацией обязательна проверка, что
-`external_id IS NULL`. Дубль поста в группе недопустим.
+`idem_key` имеет формат `{slug}:{topic_id}:{attempt}`, где `attempt` — число
+прошлых отклонений этой темы. Третий сегмент нужен потому, что отклонённая
+тема возвращается в `free` и по ней создаётся новый пост; без счётчика
+попыток уникальный индекс это заблокировал бы.
+
+Защита от дубля публикации держится НЕ на `idem_key`, а на обязательной
+проверке `external_id IS NULL` непосредственно перед вызовом публикации.
+Дубль поста в группе недопустим.
 
 Миграции: простые пронумерованные `.sql` файлы в `migrations/`, применяются
 при старте, версия в `PRAGMA user_version`.
@@ -428,7 +440,8 @@ review:
   auto_after_n_approved: 40
 
 limits:
-  posts_per_day: 2
+  posts_per_day: 2           # сколько ПУБЛИКУЕТСЯ в сутки
+  queue_buffer: 6            # сколько постов держать в работе; правило: posts_per_day × 3
   max_cost_per_post_usd: 0.40
 ```
 
