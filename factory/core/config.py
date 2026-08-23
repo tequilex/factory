@@ -156,6 +156,31 @@ class ProjectConfig(_Section):
     # Filled in by load_project, not read from YAML.
     root: Path = Field(default=Path("."), exclude=True)
 
+    @model_validator(mode="after")
+    def _schedule_must_be_able_to_carry_the_daily_limit(self) -> ProjectConfig:
+        """Расписание должно вмещать дневной лимит.
+
+        В каждый слот уходит один пост. Пустое расписание или слотов меньше, чем
+        posts_per_day, означает посты, которые молча висят в ожидании навсегда:
+        это не ошибка выполнения, retry_count не растёт, и заметить это без
+        отдельного алерта невозможно. Дешевле отказать при старте.
+        """
+        if self.publisher.provider == "stub":
+            return self
+
+        if not self.vk.schedule:
+            raise ValueError(
+                "vk.schedule пустое — публиковать будет негде, и одобренные посты "
+                "зависнут навсегда. Укажи хотя бы одно время, например [\"19:30\"]"
+            )
+        if len(self.vk.schedule) < self.limits.posts_per_day:
+            raise ValueError(
+                f"в vk.schedule {len(self.vk.schedule)} слотов, а posts_per_day = "
+                f"{self.limits.posts_per_day}. В каждый слот уходит один пост, поэтому "
+                f"нужно минимум {self.limits.posts_per_day} слотов"
+            )
+        return self
+
     @field_validator("slug")
     @classmethod
     def _check_slug(cls, value: str) -> str:

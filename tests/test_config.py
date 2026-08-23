@@ -170,6 +170,45 @@ class TestValidationMessages:
         assert "queue_buffer" in message
         assert "15" in message, "в подсказке должно быть рекомендуемое значение"
 
+    def test_empty_schedule_with_a_real_publisher_is_refused(self, demo_project):
+        """Иначе одобренные посты висят вечно: это не ошибка, retry_count не растёт,
+        и без отдельного алерта заметить невозможно."""
+
+        def mutate(data):
+            data["publisher"]["provider"] = "vk"
+            data["vk"]["schedule"] = []
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        assert "зависнут навсегда" in str(excinfo.value)
+
+    def test_too_few_slots_for_the_daily_limit_is_refused(self, demo_project):
+        def mutate(data):
+            data["publisher"]["provider"] = "vk"
+            data["vk"]["schedule"] = ["19:30"]
+            data["limits"]["posts_per_day"] = 3
+            data["limits"]["queue_buffer"] = 9
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        assert "нужно минимум 3 слотов" in str(excinfo.value)
+
+    def test_stub_publisher_may_have_no_schedule(self, demo_project):
+        """Учебный проект ничего не публикует наружу — расписание ему не нужно."""
+
+        def mutate(data):
+            data["vk"]["schedule"] = []
+
+        rewrite(demo_project, mutate)
+
+        assert config.load_project("demo").vk.schedule == []
+
     def test_slug_mismatch_between_file_and_directory(self, demo_project):
         rewrite(demo_project, lambda data: data.update(slug="other"))
 
