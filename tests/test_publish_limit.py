@@ -348,6 +348,77 @@ class TestSlotIsUsedOnce:
         assert run(ready_post["context"]()).advanced
 
 
+class TestPublishGuid:
+    """guid — третий слой защиты от дубля, и единственный, закрывающий главное окно.
+
+    Первые два (нет ретраев, проверка external_id в UPDATE) не спасают от смерти
+    процесса между отправкой и записью: пост уже в группе, а база об этом не
+    знает. guid обязан лежать в базе ДО вызова — иначе следующая попытка пойдёт
+    с новым и создаст второй пост.
+    """
+
+    def test_guid_is_saved_before_the_call(self, ready_post, monkeypatch):
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        conn = ready_post["conn"]
+        post_id = ready_post["post_id"]
+        seen: list[str | None] = []
+        ctx = ready_post["context"]()
+        original = ctx.providers.publisher.publish
+
+        def check_database_first(post, assets):
+            row = conn.execute(
+                "SELECT publish_guid FROM posts WHERE id = ?", (post_id,)
+            ).fetchone()
+            seen.append(row["publish_guid"])
+            return original(post, assets)
+
+        ctx.providers.publisher.publish = check_database_first
+
+        run(ctx)
+
+        assert seen[0], "guid не записан в базу до вызова публикации"
+
+    def test_the_publisher_receives_the_same_guid(self, ready_post, monkeypatch):
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        ctx = ready_post["context"]()
+        received: list = []
+        original = ctx.providers.publisher.publish
+
+        def capture(post, assets):
+            received.append(post.publish_guid)
+            return original(post, assets)
+
+        ctx.providers.publisher.publish = capture
+
+        run(ctx)
+
+        stored = ready_post["conn"].execute(
+            "SELECT publish_guid FROM posts WHERE id = ?", (ready_post["post_id"],)
+        ).fetchone()["publish_guid"]
+        assert received[0] == stored
+
+    def test_existing_guid_is_reused_not_replaced(self, ready_post, monkeypatch):
+        """Повтор после сбоя обязан идти с тем же guid, иначе смысл теряется."""
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        conn = ready_post["conn"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET publish_guid = 'прежний-guid' WHERE id = ?",
+                (ready_post["post_id"],),
+            )
+
+        ctx = ready_post["context"]()
+        received: list = []
+        original = ctx.providers.publisher.publish
+        ctx.providers.publisher.publish = lambda post, assets: (
+            received.append(post.publish_guid) or original(post, assets)
+        )
+
+        run(ctx)
+
+        assert received[0] == "прежний-guid"
+
+
 class TestAfterPublishing:
     def test_temporary_files_are_removed(self, ready_post, monkeypatch):
         """Иначе картинки копятся вечно: на Pi это гигабайты в год, местами в оперативке."""

@@ -59,7 +59,9 @@ class TestInit:
 
         assert result.exit_code == 0
         assert paths.db_path().exists()
-        assert "версия схемы 1" in result.output
+        # Литерал, а не вычисление: версия поднимается осознанно вместе с
+        # новой миграцией, и тест должен об этом напоминать.
+        assert "версия схемы 2" in result.output
 
     def test_running_twice_is_safe(self, tmp_env, demo_project):
         run("init")

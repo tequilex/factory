@@ -537,6 +537,97 @@ class TestCompose:
 
         assert result.next_state == State.COMPOSED
 
+    def test_cover_file_is_replaced_by_the_composed_one(self, pipeline):
+        """Шаг обязан собрать обложку, а не просто проверить, что файл на месте."""
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        cover_row = assets_of(pipeline["conn"], pipeline["post_id"])[0]
+        before = Path(cover_row["local_path"]).read_bytes()
+
+        pipeline["run"](State.IMAGES_READY)
+
+        after = Path(cover_row["local_path"]).read_bytes()
+        assert after != before, "файл обложки не изменился — сборка не выполнялась"
+
+    def test_the_headline_is_on_the_cover(self, pipeline):
+        """Проверяется по пикселям: текст действительно нарисован на картинке."""
+        import io
+        import json
+
+        from PIL import Image
+
+        from factory.compose import cover as cover_module
+
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        pipeline["run"](State.IMAGES_READY)
+
+        cover_row = assets_of(pipeline["conn"], pipeline["post_id"])[0]
+        image = Image.open(io.BytesIO(Path(cover_row["local_path"]).read_bytes()))
+        spec = json.loads(pipeline["project"].cover_template_path.read_text(encoding="utf-8"))
+
+        assert cover_module.text_bounds(image, cover_module.title_colours(spec)) is not None
+
+    def test_inline_images_are_left_alone(self, pipeline):
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        rows = assets_of(pipeline["conn"], pipeline["post_id"])
+        inline_before = {
+            row["id"]: Path(row["local_path"]).read_bytes()
+            for row in rows
+            if row["kind"] == "inline"
+        }
+
+        pipeline["run"](State.IMAGES_READY)
+
+        for asset_id, data in inline_before.items():
+            row = pipeline["conn"].execute(
+                "SELECT local_path FROM assets WHERE id = ?", (asset_id,)
+            ).fetchone()
+            assert Path(row["local_path"]).read_bytes() == data
+
+    def test_repeat_run_does_not_compose_twice(self, pipeline):
+        """Сборка поверх собранного обязана не выполняться.
+
+        Сейчас повтор безвреден случайно: плашка целиком закрывает прежний
+        заголовок, и байты совпадают. Стоит владельцу уменьшить плашку в
+        шаблоне — и старый заголовок вылезет наружу поверх новой картинки.
+        Поэтому здесь шаблон между заходами меняется: без отметки в базе второй
+        заход перерисовал бы файл, и это видно.
+        """
+        import json
+
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        pipeline["run"](State.IMAGES_READY)
+        cover_row = assets_of(pipeline["conn"], pipeline["post_id"])[0]
+        after_first = Path(cover_row["local_path"]).read_bytes()
+
+        template_path = pipeline["project"].cover_template_path
+        spec = json.loads(template_path.read_text(encoding="utf-8"))
+        spec["plate"]["height"] = 160
+        template_path.write_text(json.dumps(spec), encoding="utf-8")
+
+        result, _ = pipeline["run"](State.IMAGES_READY)
+
+        assert result.advanced
+        assert Path(cover_row["local_path"]).read_bytes() == after_first, (
+            "обложка пересобрана поверх уже собранной"
+        )
+
+    def test_composed_cover_is_marked_in_the_database(self, pipeline):
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+        pipeline["run"](State.IMAGES_READY)
+
+        cover_row = assets_of(pipeline["conn"], pipeline["post_id"])[0]
+        assert cover_row["external_ref"] == "composed"
+
     def test_missing_cover_file_is_reported_understandably(self, pipeline):
         pipeline["advance_through"](
             State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY

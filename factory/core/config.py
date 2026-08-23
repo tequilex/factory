@@ -39,7 +39,12 @@ class _Section(BaseModel):
 
 class VkCfg(_Section):
     group_id: int
+    # Ключ сообщества: умеет wall.post, но ни один метод загрузки файлов ему
+    # не доступен.
     token_env: str
+    # Ключ пользователя: умеет загрузку картинок, но wall.post ему запрещён.
+    # Нужны оба — подробности в docs/ВК-как-это-работает.md.
+    upload_token_env: str | None = None
     api_version: str = "5.199"
     schedule: list[str] = Field(default_factory=list)
     timezone: str = "Europe/Moscow"
@@ -178,6 +183,23 @@ class ProjectConfig(_Section):
                 f"в vk.schedule {len(self.vk.schedule)} слотов, а posts_per_day = "
                 f"{self.limits.posts_per_day}. В каждый слот уходит один пост, поэтому "
                 f"нужно минимум {self.limits.posts_per_day} слотов"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _vk_needs_both_keys(self) -> ProjectConfig:
+        """Боевой публикатор ВК без второго ключа не работает.
+
+        Проверяется здесь, при загрузке конфига, а не при первой публикации:
+        иначе пост доедет до последнего шага и застрянет там навсегда, а
+        владелец увидит это только через сутки по отсутствию поста в группе.
+        """
+        if self.publisher.provider == "vk" and not self.vk.upload_token_env:
+            raise ValueError(
+                "для publisher.provider: vk нужно поле vk.upload_token_env — "
+                "имя переменной с ключом пользователя. Ключ сообщества умеет "
+                "публиковать, но не умеет загружать картинки. "
+                "См. docs/ВК-как-это-работает.md"
             )
         return self
 

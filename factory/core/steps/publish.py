@@ -12,28 +12,33 @@ Gates before anything leaves the building:
 The schedule and limit gates return ``WAITING``: nothing is wrong with the post,
 it is simply not its turn.
 
-**What is and is not guaranteed about duplicates.** The step never retries — see
-``attempts=1`` below — because a publish call that times out has most likely
-already succeeded on the far side. The ``UPDATE ... AND external_id IS NULL``
-protects the database record against a second tick. What is *not* covered is the
-window between the call returning and the row being written: a kill in there
-leaves the post live in the group with nothing recorded, and the next tick will
-publish it again. Closing that needs an idempotency token the provider honours —
-VK's ``wall.post`` takes ``guid`` — and that lands with the real publisher in
-Stage 2. Until then the tick lock is the only thing narrowing the window, and
-this comment is deliberately explicit so nobody assumes otherwise.
+**How duplicates are prevented.** Three layers, each covering what the previous
+one cannot:
+
+1. the step never retries (``attempts=1`` below) — a publish call that times out
+   has most likely already succeeded on the far side;
+2. ``UPDATE ... AND external_id IS NULL`` protects the database record against a
+   second tick that got there first;
+3. ``publish_guid`` is written **before** the call and passed to the provider.
+   This is the layer that covers the gap the other two cannot: a kill between the
+   call returning and the row being written. On the next attempt the same guid
+   goes out, and VK returns the existing post instead of creating a second one.
+
+Layer 3 is why the guid is generated here and not inside the provider: it has to
+survive a process death, which means it has to be in the database first.
 """
 
 from __future__ import annotations
 
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime, time, timedelta
 
 from factory.core import db, paths
 from factory.core.clock import from_iso, now_utc, to_iso
 from factory.core.config import ProjectConfig
-from factory.core.models import Asset, State, TopicStatus
+from factory.core.models import Asset, Post, State, TopicStatus
 from factory.core.retry import tracked_call
 from factory.core.steps import StepContext, StepResult, advanced, waiting
 
@@ -173,7 +178,24 @@ def run(ctx: StepContext) -> StepResult:
             return waiting(f"в слоте {slot:%H:%M} уже была публикация")
 
     assets = _assets(ctx.conn, ctx.post.id)
-    external_id = ctx.providers.publisher.publish(ctx.post, assets)
+
+    # guid записывается ДО отправки. Если ответ не доедет, а пост уже создан,
+    # следующая попытка пойдёт с тем же guid — и ВК вернёт существующий пост
+    # вместо второго. Сгенерировать его после вызова было бы бессмысленно:
+    # именно окно между отправкой и записью мы и закрываем.
+    post = ctx.post
+    if not post.publish_guid:
+        guid = uuid.uuid4().hex
+        with db.write_transaction(ctx.conn):
+            ctx.conn.execute(
+                "UPDATE posts SET publish_guid = ? WHERE id = ? AND publish_guid IS NULL",
+                (guid, post.id),
+            )
+        post = Post.from_row(
+            ctx.conn.execute("SELECT * FROM posts WHERE id = ?", (post.id,)).fetchone()
+        )
+
+    external_id = ctx.providers.publisher.publish(post, assets)
 
     stamp = to_iso(now_utc())
     with db.write_transaction(ctx.conn):

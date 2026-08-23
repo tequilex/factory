@@ -1,0 +1,34 @@
+{
+  "module": "factory/core/steps/compose.py",
+  "tests": "tests/test_transitions.py",
+  "mutations": {
+    "не собирать обложку, только проверять файлы": [
+      "    path.write_bytes(composed)",
+      "    pass"
+    ],
+    "собирать заново при каждом вызове": [
+      "    if asset.external_ref == COMPOSED_MARK:",
+      "    if False:"
+    ],
+    "не помечать собранную обложку": [
+      "            \"UPDATE assets SET external_ref = ? WHERE id = ?\", (COMPOSED_MARK, asset.id)",
+      "            \"UPDATE assets SET external_ref = external_ref WHERE id = ?\", (asset.id,)"
+    ],
+    "собирать поверх inline-картинки вместо обложки": [
+      "        \"SELECT * FROM assets WHERE post_id = ? AND kind = ? ORDER BY position LIMIT 1\",\n        (ctx.post.id, AssetKind.COVER),",
+      "        \"SELECT * FROM assets WHERE post_id = ? AND kind != ? ORDER BY position LIMIT 1\",\n        (ctx.post.id, AssetKind.COVER),"
+    ],
+    "не проверять наличие заголовка": [
+      "    if not ctx.post.title:",
+      "    if False:"
+    ],
+    "не проверять существование файла": [
+      "    if not asset.local_path or not Path(asset.local_path).is_file():",
+      "    if False:"
+    ],
+    "не проверять отсутствие записи обложки": [
+      "    if row is None:",
+      "    if False:"
+    ]
+  }
+}

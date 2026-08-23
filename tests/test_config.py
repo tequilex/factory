@@ -209,6 +209,40 @@ class TestValidationMessages:
 
         assert config.load_project("demo").vk.schedule == []
 
+    def test_vk_publisher_without_the_upload_key_is_refused(self, demo_project):
+        """Ключ сообщества публикует, но картинки грузить не умеет — нужен второй."""
+
+        def mutate(data):
+            data["publisher"]["provider"] = "vk"
+            data["vk"].pop("upload_token_env", None)
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        message = str(excinfo.value)
+        assert "upload_token_env" in message
+        assert "ВК-как-это-работает" in message
+
+    def test_vk_publisher_with_both_keys_is_accepted(self, demo_project):
+        def mutate(data):
+            data["publisher"]["provider"] = "vk"
+            data["vk"]["upload_token_env"] = "VK_UPLOAD_DEMO"
+
+        rewrite(demo_project, mutate)
+
+        cfg = config.load_project("demo")
+
+        assert cfg.vk.upload_token_env == "VK_UPLOAD_DEMO"
+
+    def test_stub_publisher_does_not_need_the_upload_key(self, demo_project):
+        """На заглушке второй ключ не нужен — иначе Этап 1 нельзя было бы запустить."""
+        cfg = config.load_project("demo")
+
+        assert cfg.publisher.provider == "stub"
+        assert cfg.vk.upload_token_env is None
+
     def test_slug_mismatch_between_file_and_directory(self, demo_project):
         rewrite(demo_project, lambda data: data.update(slug="other"))
 

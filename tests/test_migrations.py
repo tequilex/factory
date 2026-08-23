@@ -8,6 +8,10 @@ from factory.core import db, paths
 from factory.core.errors import DbError, FactoryError
 from tests.conftest import insert_post, insert_project, insert_topic
 
+# Версия поднимается осознанно при каждой новой миграции. Литерал, а не
+# вычисление из каталога: иначе тест сравнивал бы схему сам с собой.
+EXPECTED_SCHEMA_VERSION = 2
+
 EXPECTED_TABLES = {
     "projects",
     "topics",
@@ -30,13 +34,13 @@ def test_all_tables_are_created(conn):
 
 
 def test_schema_version_is_recorded(conn):
-    assert db.schema_version(conn) == 1
+    assert db.schema_version(conn) == EXPECTED_SCHEMA_VERSION
 
 
 def test_migrate_is_idempotent(conn):
     before = table_names(conn)
-    assert db.migrate(conn) == 1
-    assert db.migrate(conn) == 1
+    assert db.migrate(conn) == EXPECTED_SCHEMA_VERSION
+    assert db.migrate(conn) == EXPECTED_SCHEMA_VERSION
     assert table_names(conn) == before
 
 
@@ -209,30 +213,30 @@ class TestMigrationDiscovery:
         assert "NNN_описание.sql" in str(excinfo.value)
 
     def test_duplicate_numbers_are_refused(self, conn, tmp_path):
-        (tmp_path / "002_a.sql").write_text("SELECT 1;", encoding="utf-8")
-        (tmp_path / "002_b.sql").write_text("SELECT 1;", encoding="utf-8")
+        (tmp_path / "020_a.sql").write_text("SELECT 1;", encoding="utf-8")
+        (tmp_path / "020_b.sql").write_text("SELECT 1;", encoding="utf-8")
 
         with pytest.raises(DbError, match="одинаковым номером"):
             db.migrate(conn, tmp_path)
 
     def test_migrations_apply_in_numeric_not_alphabetic_order(self, conn, tmp_path):
         """10 идёт после 9, а не между 1 и 2 — сортировка строк тут врёт."""
-        (tmp_path / "002_first.sql").write_text(
+        (tmp_path / "020_first.sql").write_text(
             "CREATE TABLE step_two (id INTEGER);", encoding="utf-8"
         )
-        (tmp_path / "010_second.sql").write_text(
+        (tmp_path / "030_second.sql").write_text(
             "ALTER TABLE step_two ADD COLUMN name TEXT;", encoding="utf-8"
         )
 
-        assert db.migrate(conn, tmp_path) == 10
+        assert db.migrate(conn, tmp_path) == 30
 
     def test_failed_migration_leaves_the_previous_version_intact(self, conn, tmp_path):
-        (tmp_path / "002_broken.sql").write_text("СИНТАКСИС НЕ SQL;", encoding="utf-8")
+        (tmp_path / "020_broken.sql").write_text("СИНТАКСИС НЕ SQL;", encoding="utf-8")
 
         with pytest.raises(DbError):
             db.migrate(conn, tmp_path)
 
-        assert db.schema_version(conn) == 1
+        assert db.schema_version(conn) == EXPECTED_SCHEMA_VERSION
         assert EXPECTED_TABLES <= table_names(conn)
 
 
@@ -254,7 +258,7 @@ class TestConnect:
     def test_open_db_connects_and_migrates(self):
         conn = db.open_db()
         try:
-            assert db.schema_version(conn) == 1
+            assert db.schema_version(conn) == EXPECTED_SCHEMA_VERSION
             assert paths.db_path().exists()
         finally:
             conn.close()

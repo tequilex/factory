@@ -42,6 +42,27 @@ def _stub_publisher(config: ProjectConfig):
     return StubPublisher(group_id=config.vk.group_id)
 
 
+def _vk_publisher(config: ProjectConfig):
+    from factory.core.config import resolve_secret
+    from factory.providers.publishers.vk import VkPublisher
+
+    # Два ключа. Оба обязательны: конфиг это уже проверил, но секреты
+    # разрешаются здесь — их отсутствие должно быть видно при сборке
+    # провайдера, а не на последнем шаге пайплайна.
+    return VkPublisher(
+        group_id=config.vk.group_id,
+        token=resolve_secret(
+            config.vk.token_env, context=f"публикации в группу проекта {config.slug}"
+        ),
+        upload_token=resolve_secret(
+            config.vk.upload_token_env,
+            context=f"загрузки картинок в ВК для проекта {config.slug}",
+        ),
+        api_version=config.vk.api_version,
+        proxy_env=config.vk.proxy_env,
+    )
+
+
 # Real implementations arrive in later stages; the names are already accepted by
 # the config so a project can be written before its provider exists.
 LLM_BUILDERS: dict[str, Callable[[ProjectConfig], LLMProvider]] = {
@@ -54,13 +75,13 @@ IMAGE_BUILDERS: dict[str, Callable[[ProjectConfig], ImageProvider]] = {
 
 PUBLISHER_BUILDERS: dict[str, Callable[[ProjectConfig], Publisher]] = {
     "stub": _stub_publisher,
+    "vk": _vk_publisher,
 }
 
 _STAGE_OF = {
     "openai_compatible": "Этапе 3",
     "anthropic": "Этапе 3",
     "replicate": "Этапе 4",
-    "vk": "Этапе 2",
 }
 
 

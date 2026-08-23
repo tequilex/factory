@@ -170,6 +170,7 @@ class Post(_Row):
     scheduled_at: datetime | None = None
     external_id: str | None = None
     published_at: datetime | None = None
+    publish_guid: str | None = None
 
     _TIMESTAMPS: ClassVar[frozenset[str]] = frozenset(
         {"created_at", "updated_at", "next_attempt_at", "scheduled_at", "published_at"}

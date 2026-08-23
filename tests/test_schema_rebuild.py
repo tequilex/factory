@@ -50,6 +50,7 @@ CREATE TABLE posts_new (
     scheduled_at  TEXT,
     external_id   TEXT,
     published_at  TEXT,
+    publish_guid  TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -57,7 +58,7 @@ CREATE TABLE posts_new (
 INSERT INTO posts_new SELECT
     id, project_id, topic_id, idem_key, state, title, body, question,
     factcheck_verdict, factcheck_notes, retry_count, last_error, next_attempt_at,
-    scheduled_at, external_id, published_at, created_at, updated_at
+    scheduled_at, external_id, published_at, publish_guid, created_at, updated_at
 FROM posts;
 
 DROP TABLE posts;
@@ -98,15 +99,15 @@ def populated(conn):
 @pytest.fixture
 def rebuild_migration(tmp_path):
     """Каталог с единственной миграцией 002 — пересборкой posts."""
-    (tmp_path / "002_extend_state_check.sql").write_text(
+    (tmp_path / "020_extend_state_check.sql").write_text(
         REBUILD_POSTS_WITH_NEW_STATE, encoding="utf-8"
     )
     return tmp_path
 
 
 def test_table_rebuild_applies(populated, rebuild_migration):
-    assert db.migrate(populated["conn"], rebuild_migration) == 2
-    assert db.schema_version(populated["conn"]) == 2
+    assert db.migrate(populated["conn"], rebuild_migration) == 20
+    assert db.schema_version(populated["conn"]) == 20
 
 
 def test_rows_survive_the_rebuild(populated, rebuild_migration):
@@ -178,7 +179,7 @@ def test_indexes_are_recreated(populated, rebuild_migration):
 
 def test_migration_that_orphans_rows_is_rolled_back(populated, tmp_path):
     """Забыли перелить строки — миграция должна откатиться, а не оставить мусор."""
-    (tmp_path / "002_forgot_to_copy.sql").write_text(
+    (tmp_path / "020_forgot_to_copy.sql").write_text(
         """
         CREATE TABLE posts_new (
             id            INTEGER PRIMARY KEY,
@@ -200,6 +201,6 @@ def test_migration_that_orphans_rows_is_rolled_back(populated, tmp_path):
         db.migrate(conn, tmp_path)
 
     assert "нарушила связи" in str(excinfo.value)
-    assert db.schema_version(conn) == 1
+    assert db.schema_version(conn) == 2
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
