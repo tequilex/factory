@@ -31,8 +31,8 @@
       "    pass"
     ],
     "не рисовать заголовок": [
-    "    if title.strip():",
-    "    if False:"
+      "    if prepared.strip():",
+      "    if False:"
     ],
     "заливать весь холст вместо фона": [
       "    if image.size != size:\n        image = image.resize(size, Image.LANCZOS)",
@@ -53,6 +53,30 @@
     "сохранять в JPEG вместо PNG": [
       "    image.save(buffer, format=\"PNG\", optimize=True)",
       "    image.save(buffer, format=\"JPEG\")"
+    ],
+    "игнорировать uppercase из шаблона": [
+      "    return text.upper() if spec[\"title\"].get(\"uppercase\") else text",
+      "    return text"
+    ],
+    "игнорировать акцентный цвет первой строки": [
+      "            colour = accent_colour if index < accent_lines else base_colour",
+      "            colour = base_colour"
+    ],
+    "красить акцентом все строки": [
+      "            colour = accent_colour if index < accent_lines else base_colour",
+      "            colour = accent_colour"
+    ],
+    "игнорировать выравнивание, всегда по левому краю": [
+      "    if align == \"center\":\n        return plate[\"x\"] + (plate[\"width\"] - font.getbbox(line)[2]) // 2",
+      "    if False:\n        return plate[\"x\"] + (plate[\"width\"] - font.getbbox(line)[2]) // 2"
+    ],
+    "игнорировать шрифт из шаблона": [
+      "        font = load_font(fit_font_size(title, spec), title_spec.get(\"font\", DEFAULT_FONT))",
+      "        font = load_font(fit_font_size(title, spec), \"NotoSans-Bold.ttf\")"
+    ],
+    "молча подставлять шрифт по умолчанию вместо ошибки": [
+      "    if not path.is_file():",
+      "    if False:"
     ]
   }
 }

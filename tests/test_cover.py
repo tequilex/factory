@@ -96,7 +96,7 @@ class TestTitle:
         padding = plate["padding"]
         image = build(template, background, LONG_TITLE)
 
-        box = cover.text_bounds(image, cover.parse_colour(spec["title"]["color"]))
+        box = cover.text_bounds(image, cover.title_colours(spec))
 
         assert box is not None, "текст не отрисован"
         left, top, right, bottom = box
@@ -131,9 +131,12 @@ class TestTitle:
         chosen = cover.fit_font_size(LONG_TITLE, spec)
         assert chosen < spec["title"]["size_max"], "подобрать нечего: заголовок влез в максимум"
 
-        bigger = cover.load_font(chosen + 1)
+        # Мерить надо ровно тот текст, который рисуется: заглавные шире строчных,
+        # и на исходном регистре проверка была бы про другой заголовок.
+        prepared = cover.prepare(LONG_TITLE, spec)
+        bigger = cover.load_font(chosen + 1, spec["title"]["font"])
         width, height = cover._block_size(
-            cover.wrap(LONG_TITLE, bigger, available_width), bigger, spacing
+            cover.wrap(prepared, bigger, available_width), bigger, spacing
         )
 
         assert width > available_width or height > available_height, (
@@ -149,12 +152,13 @@ class TestTitle:
 
     def test_words_are_not_broken_in_the_middle(self, template):
         spec = json.loads(template.read_text(encoding="utf-8"))
-        font = cover.load_font(cover.fit_font_size(LONG_TITLE, spec))
+        font = cover.load_font(cover.fit_font_size(LONG_TITLE, spec), spec["title"]["font"])
         available = spec["plate"]["width"] - 2 * spec["plate"]["padding"]
+        prepared = cover.prepare(LONG_TITLE, spec)
 
-        lines = cover.wrap(LONG_TITLE, font, available)
+        lines = cover.wrap(prepared, font, available)
 
-        assert " ".join(lines) == LONG_TITLE, "слова переставлены или разорваны"
+        assert " ".join(lines) == prepared, "слова переставлены или разорваны"
         assert len(lines) > 1, "длинный заголовок должен переноситься"
 
     def test_a_single_unbreakable_word_does_not_crash(self, template, background):
@@ -167,11 +171,86 @@ class TestTitle:
 
     def test_title_is_actually_drawn(self, template, background):
         spec = json.loads(template.read_text(encoding="utf-8"))
-        with_text = build(template, background, LONG_TITLE)
-        without = build(template, background, "")
+        colours = cover.title_colours(spec)
 
-        assert cover.text_bounds(with_text, cover.parse_colour(spec["title"]["color"]))
-        assert cover.text_bounds(without, cover.parse_colour(spec["title"]["color"])) is None
+        assert cover.text_bounds(build(template, background, LONG_TITLE), colours)
+        assert cover.text_bounds(build(template, background, ""), colours) is None
+
+
+class TestLook:
+    """Свойства оформления, заданные шаблоном.
+
+    Всё это задаётся в JSON и меняется без правки кода — тесты стерегут, что
+    шаблон действительно управляет отрисовкой, а не игнорируется.
+    """
+
+    def test_uppercase_is_applied(self, template, background):
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        assert spec["title"]["uppercase"] is True
+
+        assert cover.prepare("Три года", spec) == "ТРИ ГОДА"
+
+    def test_uppercase_can_be_switched_off(self, template):
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec["title"]["uppercase"] = False
+
+        assert cover.prepare("Три года", spec) == "Три года"
+
+    def test_first_line_uses_the_accent_colour(self, template, background):
+        """В референсе первая строка выделена цветом — на этом держится акцент."""
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        image = build(template, background, LONG_TITLE)
+
+        accent = cover.text_bounds(image, cover.parse_colour(spec["title"]["accent_color"]))
+        base = cover.text_bounds(image, cover.parse_colour(spec["title"]["color"]))
+
+        assert accent is not None, "акцентная строка не нарисована"
+        assert base is not None, "остальные строки не нарисованы"
+        assert accent[1] < base[1], "акцентная строка должна быть первой сверху"
+        assert accent[3] <= base[1] + 5, "строки наложились друг на друга"
+
+    def test_without_accent_colour_all_lines_are_the_same(self, template, background):
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec["title"].pop("accent_color")
+        template.write_text(json.dumps(spec), encoding="utf-8")
+        image = build(template, background, LONG_TITLE)
+
+        assert cover.text_bounds(image, cover.parse_colour("#8E1B18")) is None
+
+    def test_lines_are_centred(self, template, background):
+        """Центрирование: поля слева и справа должны совпадать."""
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        plate = spec["plate"]
+        image = build(template, background, "Короткий")
+
+        box = cover.text_bounds(image, cover.title_colours(spec))
+        left_gap = box[0] - plate["x"]
+        right_gap = plate["x"] + plate["width"] - box[2]
+
+        assert abs(left_gap - right_gap) <= 6, f"поля разные: {left_gap} и {right_gap}"
+
+    def test_left_alignment_still_works(self, template, background):
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec["title"]["align"] = "left"
+        template.write_text(json.dumps(spec), encoding="utf-8")
+        image = build(template, background, "Короткий")
+
+        box = cover.text_bounds(image, cover.title_colours(spec))
+
+        assert box[0] - spec["plate"]["x"] <= spec["plate"]["padding"] + 6
+
+    def test_font_comes_from_the_template(self, template):
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        narrow = cover.load_font(80, spec["title"]["font"])
+        wide = cover.load_font(80, "NotoSans-Bold.ttf")
+
+        assert narrow.getbbox("ШИРИНА СТРОКИ")[2] < wide.getbbox("ШИРИНА СТРОКИ")[2]
+
+    def test_unknown_font_lists_what_is_available(self):
+        with pytest.raises(FactoryError) as excinfo:
+            cover.load_font(40, "НетТакогоШрифта.ttf")
+
+        assert "PTSansNarrow-Bold.ttf" in str(excinfo.value)
 
 
 class TestTemplateErrors:

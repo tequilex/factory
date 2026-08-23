@@ -1,5 +1,5 @@
 {
-  "_comment": "Шаблон обложки. Используется на Этапе 2 модулем compose/cover.py. Все координаты в пикселях от левого верхнего угла.",
+  "_comment": "Шаблон обложки. Всё оформление задаётся здесь — код менять не нужно. Координаты в пикселях от левого верхнего угла.",
 
   "canvas": {
     "width": 1080,
@@ -8,26 +8,30 @@
   },
 
   "frame": {
-    "color": "#D32F2F",
-    "width_px": 28
+    "color": "#D8342B",
+    "width_px": 22
   },
 
+  "_plate_comment": "Плашка во всю ширину между рамками, прижата к верху.",
   "plate": {
-    "x": 64,
-    "y": 64,
-    "width": 952,
-    "height": 420,
+    "x": 22,
+    "y": 22,
+    "width": 1036,
+    "height": 340,
     "color": "#FFFFFF",
-    "padding": 36
+    "padding": 24
   },
 
   "title": {
-    "color": "#111111",
-    "font": "bold.ttf",
-    "size_min": 44,
-    "size_max": 112,
-    "line_spacing": 1.12,
-    "align": "left",
-    "valign": "center"
+    "font": "PTSansNarrow-Bold.ttf",
+    "color": "#1A1A1A",
+    "accent_color": "#8E1B18",
+    "accent_lines": 1,
+    "uppercase": true,
+    "align": "center",
+    "valign": "center",
+    "size_min": 40,
+    "size_max": 130,
+    "line_spacing": 1.04
   }
 }
