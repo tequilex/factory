@@ -1,0 +1,26 @@
+{
+  "module": "factory/core/steps/images.py",
+  "tests": "tests/test_transitions.py",
+  "mutations": {
+    "генерировать заново уже готовые картинки": [
+      "        \"SELECT * FROM assets WHERE post_id = ? AND local_path IS NULL ORDER BY position\",",
+      "        \"SELECT * FROM assets WHERE post_id = ? ORDER BY position\","
+    ],
+    "не замечать пропавший на диске файл": [
+      "            if not _still_on_disk(asset):",
+      "            if False:"
+    ],
+    "не сохранять путь к сгенерированной картинке": [
+      "            [(path, asset_id) for asset_id, path in results],",
+      "            [(None, asset_id) for asset_id, path in results],"
+    ],
+    "игнорировать seed при генерации": [
+      "        seed=asset.seed,",
+      "        seed=None,"
+    ],
+    "класть файлы в общий каталог вместо каталога поста": [
+      "    target_dir = paths.post_tmp_dir(ctx.post.id)",
+      "    target_dir = paths.tmp_dir()"
+    ]
+  }
+}

@@ -34,9 +34,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_tests(tests: str) -> tuple[bool, list[str]]:
+def run_tests(tests: str | list[str]) -> tuple[bool, list[str]]:
+    # "tests" может быть строкой с несколькими путями через пробел или списком.
+    targets = tests.split() if isinstance(tests, str) else list(tests)
     result = subprocess.run(
-        ["uv", "run", "pytest", tests, "-q", "--no-header", "-p", "no:cacheprovider"],
+        ["uv", "run", "pytest", *targets, "-q", "--no-header", "-p", "no:cacheprovider"],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

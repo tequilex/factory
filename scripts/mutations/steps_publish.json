@@ -1,0 +1,50 @@
+{
+  "module": "factory/core/steps/publish.py",
+  "tests": "tests/test_transitions.py tests/test_publish_limit.py",
+  "mutations": {
+    "убрать проверку external_id — допустить дубль публикации": [
+      "    if ctx.post.external_id:",
+      "    if False:"
+    ],
+    "убрать защиту от параллельной публикации в UPDATE": [
+      "            \"WHERE id = ? AND external_id IS NULL\",",
+      "            \"WHERE id = ?\","
+    ],
+    "считать дневной лимит по updated_at вместо published_at": [
+      "        \"SELECT published_at FROM posts WHERE project_id = ? AND published_at IS NOT NULL\",",
+      "        \"SELECT updated_at AS published_at FROM posts WHERE project_id = ?\","
+    ],
+    "считать сутки в UTC, а не в поясе проекта": [
+      "    today = now_utc().astimezone(project.vk.tz).date()",
+      "    today = now_utc().date()"
+    ],
+    "не проверять дневной лимит": [
+      "    if already >= ctx.project.limits.posts_per_day:",
+      "    if False:"
+    ],
+    "не проверять расписание": [
+      "    elif open_slot(ctx.project, now_utc()) is None:",
+      "    elif False:"
+    ],
+    "игнорировать FACTORY_IGNORE_SCHEDULE": [
+      "    if paths.ignore_schedule():\n        pass",
+      "    if False:\n        pass"
+    ],
+    "не помечать тему использованной": [
+      "            ctx.conn.execute(\n                \"UPDATE topics SET status = ?, used_at = ? WHERE id = ?\",\n                (TopicStatus.USED, stamp, ctx.post.topic_id),\n            )",
+      "            pass"
+    ],
+    "не записывать published_at": [
+      "            (external_id, stamp, stamp, ctx.post.id),",
+      "            (external_id, None, stamp, ctx.post.id),"
+    ],
+    "сделать окно слота нулевым": [
+      "SLOT_WINDOW_MIN = 60",
+      "SLOT_WINDOW_MIN = 0"
+    ],
+    "конвертировать published_at строки в UTC вместо пояса проекта": [
+      "    return sum(1 for row in rows if from_iso(row[\"published_at\"]).astimezone(project.vk.tz).date() == today)",
+      "    return sum(1 for row in rows if from_iso(row[\"published_at\"]).date() == today)"
+    ]
+  }
+}
