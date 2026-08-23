@@ -396,14 +396,14 @@ limits:
 `factory/providers/llm/stub.py`, `factory/providers/images/stub.py`,
 `factory/providers/publishers/stub.py`; тест `tests/test_providers_stub.py`
 
-- [ ] **Шаг 1.** Тест: `build_providers(cfg)` по конфигу `demo` возвращает три stub-реализации
-- [ ] **Шаг 2.** Тест: неизвестное имя провайдера даёт `ConfigError` со списком доступных
-- [ ] **Шаг 3.** Тест: `StubLLM.complete(system, user, schema=PostDraft)` возвращает экземпляр `PostDraft` с непустыми `title` (≤ 60 символов, без точки в конце), `body`, `question`
-- [ ] **Шаг 4.** Тест: `StubImages.generate(prompt, ...)` возвращает байты валидного PNG размером 1080×1350 (проверить через `PIL.Image.open`)
-- [ ] **Шаг 5.** Тест: `StubPublisher.publish(post, assets)` создаёт файл в `FACTORY_TMP_DIR` и возвращает строку вида `stub_<post_id>`
-- [ ] **Шаг 6.** Запустить, убедиться что падает
-- [ ] **Шаг 7.** Реализовать `base.py` (три `Protocol` дословно из спеки + pydantic-схемы `PostDraft`, `FactcheckResult`, `ScenePrompts`), `registry.py`, три заглушки. Заглушки детерминированные: один и тот же вход даёт один и тот же выход
-- [ ] **Шаг 8.** Тесты зелёные, коммит: `feat: протоколы провайдеров и stub-реализации`
+- [x] **Шаг 1.** Тест: `build_providers(cfg)` по конфигу `demo` возвращает три stub-реализации
+- [x] **Шаг 2.** Тест: неизвестное имя провайдера даёт `ConfigError` со списком доступных
+- [x] **Шаг 3.** Тест: `StubLLM.complete(system, user, schema=PostDraft)` возвращает экземпляр `PostDraft` с непустыми `title` (≤ 60 символов, без точки в конце), `body`, `question`
+- [x] **Шаг 4.** Тест: `StubImages.generate(prompt, ...)` возвращает байты валидного PNG размером 1080×1350 (проверить через `PIL.Image.open`)
+- [x] **Шаг 5.** Тест: `StubPublisher.publish(post, assets)` создаёт файл в `FACTORY_TMP_DIR` и возвращает строку вида `stub_<post_id>`
+- [x] **Шаг 6.** Запустить, убедиться что падает
+- [x] **Шаг 7.** Реализовать `base.py` (три `Protocol` дословно из спеки + pydantic-схемы `PostDraft`, `FactcheckResult`, `ScenePrompts`), `registry.py`, три заглушки. Заглушки детерминированные: один и тот же вход даёт один и тот же выход
+- [x] **Шаг 8.** Тесты зелёные, коммит: `feat: протоколы провайдеров и stub-реализации`
 
 ---
 

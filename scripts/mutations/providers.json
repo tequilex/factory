@@ -1,0 +1,26 @@
+{
+  "module": "factory/providers/base.py",
+  "tests": "tests/test_providers_stub.py",
+  "mutations": {
+    "не обрезать точку в конце заголовка": [
+        "        return value.rstrip().rstrip(\".\")",
+        "        return value"
+    ],
+    "снять ограничение длины заголовка": [
+      "    title: str = Field(min_length=1, max_length=TITLE_MAX_LENGTH)",
+      "    title: str = Field(min_length=1)"
+    ],
+    "разрешить любой вердикт фактчека": [
+      "    verdict: str = Field(pattern=\"^(ok|fixed|uncertain)$\")",
+      "    verdict: str"
+    ],
+    "изменить размер картинки": [
+      "IMAGE_HEIGHT = 1350",
+      "IMAGE_HEIGHT = 1080"
+    ],
+    "изменить лимит длины заголовка": [
+      "TITLE_MAX_LENGTH = 60",
+      "TITLE_MAX_LENGTH = 200"
+    ]
+  }
+}
