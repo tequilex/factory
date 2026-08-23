@@ -382,11 +382,11 @@ limits:
 
 **Файлы:** создать `factory/core/http.py`; тест `tests/test_http.py`
 
-- [ ] **Шаг 1.** Тест: `client_for("llm")` при `LLM_PROXY=http://a` использует его; при отсутствии `LLM_PROXY`, но наличии `HTTPS_PROXY=http://b` — использует `b`; при отсутствии обоих — без прокси
-- [ ] **Шаг 2.** Тест: таймауты `connect=10`, `read=120`
-- [ ] **Шаг 3.** Запустить, убедиться что падает
-- [ ] **Шаг 4.** Реализовать `http.py`: `client_for(provider_name, *, base_url=None, headers=None) -> httpx.Client`
-- [ ] **Шаг 5.** Тесты зелёные, коммит: `feat: фабрика httpx-клиентов с прокси на провайдера`
+- [x] **Шаг 1.** Тест: `client_for("llm")` при `LLM_PROXY=http://a` использует его; при отсутствии `LLM_PROXY`, но наличии `HTTPS_PROXY=http://b` — использует `b`; при отсутствии обоих — без прокси
+- [x] **Шаг 2.** Тест: таймауты `connect=10`, `read=120`
+- [x] **Шаг 3.** Запустить, убедиться что падает
+- [x] **Шаг 4.** Реализовать `http.py`: `client_for(provider_name, *, base_url=None, headers=None) -> httpx.Client`
+- [x] **Шаг 5.** Тесты зелёные, коммит: `feat: фабрика httpx-клиентов с прокси на провайдера`
 
 ---
 

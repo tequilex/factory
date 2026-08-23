@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/http.py",
+  "tests": "tests/test_http.py",
+  "mutations": {
+    "игнорировать прокси провайдера, брать только глобальный": [
+      "    candidates += [f\"{provider.upper()}_PROXY\", \"HTTPS_PROXY\", \"https_proxy\", \"HTTP_PROXY\", \"http_proxy\"]",
+      "    candidates += [\"HTTPS_PROXY\", \"https_proxy\", \"HTTP_PROXY\", \"http_proxy\"]"
+    ],
+    "глобальный прокси главнее прокси провайдера": [
+      "    candidates += [f\"{provider.upper()}_PROXY\", \"HTTPS_PROXY\", \"https_proxy\", \"HTTP_PROXY\", \"http_proxy\"]",
+      "    candidates = [\"HTTPS_PROXY\", \"https_proxy\"] + candidates + [f\"{provider.upper()}_PROXY\"]"
+    ],
+    "игнорировать имя переменной из конфига": [
+      "    if proxy_env:\n        candidates.append(proxy_env)",
+      "    if False:\n        candidates.append(proxy_env)"
+    ],
+    "считать пустую строку валидным адресом прокси": [
+      "        if value:\n            return value",
+      "        if value is not None:\n            return value"
+    ],
+    "перепутать таймауты connect и read": [
+      "        timeout=timeout or httpx.Timeout(READ_TIMEOUT_SEC, connect=CONNECT_TIMEOUT_SEC),",
+      "        timeout=timeout or httpx.Timeout(CONNECT_TIMEOUT_SEC, connect=READ_TIMEOUT_SEC),"
+    ],
+    "изменить таймаут чтения": [
+      "READ_TIMEOUT_SEC = 120.0",
+      "READ_TIMEOUT_SEC = 30.0"
+    ],
+    "не передавать прокси в клиент": [
+      "        proxy=proxy,",
+      "        proxy=None,"
+    ],
+    "не следовать редиректам": [
+      "        follow_redirects=True,",
+      "        follow_redirects=False,"
+    ],
+    "потерять переданные заголовки": [
+      "    if headers:\n        merged.update(headers)",
+      "    if False:\n        merged.update(headers)"
+    ]
+  }
+}
