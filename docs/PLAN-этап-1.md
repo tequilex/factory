@@ -270,12 +270,12 @@ limits:
 **Файлы:** `pyproject.toml`, `.python-version`, `.gitignore`, `.env.example`,
 `factory/__init__.py`, `tests/__init__.py`
 
-- [ ] **Шаг 1.** Установить `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- [ ] **Шаг 2.** Создать `pyproject.toml`: зависимости `httpx`, `pydantic>=2`, `pyyaml`, `pillow`, `typer`; dev-группа `pytest`; `[project.scripts] factory = "factory.cli:app"`; секция `[tool.pytest.ini_options]` с `testpaths = ["tests"]`
-- [ ] **Шаг 3.** `.gitignore`: `.venv/`, `__pycache__/`, `*.db`, `*.db-wal`, `*.db-shm`, `.env`, `data/`, `tmp/`
-- [ ] **Шаг 4.** `uv sync` — проверить, что виртуальное окружение создалось
-- [ ] **Шаг 5.** Прогнать `uv run pytest` — ожидаемо «no tests ran», без ошибок импорта
-- [ ] **Шаг 6.** Коммит: `chore: каркас проекта и зависимости`
+- [x] **Шаг 1.** Установить `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- [x] **Шаг 2.** Создать `pyproject.toml`: зависимости `httpx`, `pydantic>=2`, `pyyaml`, `pillow`, `typer`; dev-группа `pytest`; `[project.scripts] factory = "factory.cli:app"`; секция `[tool.pytest.ini_options]` с `testpaths = ["tests"]`
+- [x] **Шаг 3.** `.gitignore`: `.venv/`, `__pycache__/`, `*.db`, `*.db-wal`, `*.db-shm`, `.env`, `data/`, `tmp/`
+- [x] **Шаг 4.** `uv sync` — проверить, что виртуальное окружение создалось
+- [x] **Шаг 5.** Прогнать `uv run pytest` — ожидаемо «no tests ran», без ошибок импорта
+- [x] **Шаг 6.** Коммит: `chore: каркас проекта и зависимости`
 
 ---
 
@@ -284,17 +284,17 @@ limits:
 **Файлы:** создать `factory/core/paths.py`, `factory/core/clock.py`, `factory/core/errors.py`,
 `factory/core/logging.py`; тесты `tests/test_paths.py`, `tests/test_errors.py`, `tests/test_logging.py`
 
-- [ ] **Шаг 1.** Тест `tests/test_paths.py`: без env — значения по умолчанию (`/data`, `/tmp/factory`, `/app/projects`, `1`, `600`, `3`, `1800`); с выставленными env — берутся они; `post_tmp_dir(42)` возвращает `{FACTORY_TMP_DIR}/42`
-- [ ] **Шаг 1а.** Тест: `ensure_data_dir()` при недоступном на запись каталоге (подставить `/data` под обычным пользователем macOS) бросает `FactoryError`, а не `PermissionError`. В тексте должно быть: каталог, причина и готовая к копипасту подсказка `export FACTORY_DATA_DIR=~/factory-data`
-- [ ] **Шаг 2.** Запустить, убедиться что падает
-- [ ] **Шаг 3.** Реализовать `paths.py`: функции `data_dir()`, `tmp_dir()`, `projects_dir()`, `db_path()`, `backups_dir()`, `env_file()`, `post_tmp_dir(post_id)`, `max_parallel_images()`, `tick_interval_sec()`, `max_steps_per_tick()`, `lock_ttl_sec()`, `ignore_schedule()`, `ensure_data_dir()`. Числа читаются через хелпер, который на нечисловое значение бросает `FactoryError` с текстом вида «Переменная FACTORY_TICK_INTERVAL_SEC должна быть числом, сейчас там 'abc'. Исправь /data/.env». `ensure_data_dir()` ловит `PermissionError`/`OSError` при создании каталога и переводит в `FactoryError` с подсказкой про `FACTORY_DATA_DIR` — значение по умолчанию `/data` рассчитано на контейнер и на macOS без `sudo` не создаётся
-- [ ] **Шаг 4.** Реализовать `clock.py`: `now_utc() -> datetime` (aware, UTC), `to_iso(dt) -> str`, `from_iso(s) -> datetime`
-- [ ] **Шаг 5.** Тест `tests/test_errors.py`: `FactoryError("что", why="почему", what_to_do="что делать")` при печати даёт три строки в этом порядке
-- [ ] **Шаг 6.** Реализовать `errors.py`: `FactoryError` + `ConfigError`, `DbError`, `ProviderError`, `LockError`
-- [ ] **Шаг 7.** Тест `tests/test_logging.py`: строка лога — валидный JSON с полями `ts`, `level`, `msg`; значение с ключом, содержащим `token`/`key`/`secret`/`password`, заменено на `***`
-- [ ] **Шаг 8.** Реализовать `logging.py`: `setup_logging()`, JSON-форматтер, фильтр секретов
-- [ ] **Шаг 9.** `uv run pytest tests/test_paths.py tests/test_errors.py tests/test_logging.py -v` — всё зелёное
-- [ ] **Шаг 10.** Коммит: `feat: пути, время, ошибки и структурные логи`
+- [x] **Шаг 1.** Тест `tests/test_paths.py`: без env — значения по умолчанию (`/data`, `/tmp/factory`, `/app/projects`, `1`, `600`, `3`, `1800`); с выставленными env — берутся они; `post_tmp_dir(42)` возвращает `{FACTORY_TMP_DIR}/42`
+- [x] **Шаг 1а.** Тест: `ensure_data_dir()` при недоступном на запись каталоге (подставить `/data` под обычным пользователем macOS) бросает `FactoryError`, а не `PermissionError`. В тексте должно быть: каталог, причина и готовая к копипасту подсказка `export FACTORY_DATA_DIR=~/factory-data`
+- [x] **Шаг 2.** Запустить, убедиться что падает
+- [x] **Шаг 3.** Реализовать `paths.py`: функции `data_dir()`, `tmp_dir()`, `projects_dir()`, `db_path()`, `backups_dir()`, `env_file()`, `post_tmp_dir(post_id)`, `max_parallel_images()`, `tick_interval_sec()`, `max_steps_per_tick()`, `lock_ttl_sec()`, `ignore_schedule()`, `ensure_data_dir()`. Числа читаются через хелпер, который на нечисловое значение бросает `FactoryError` с текстом вида «Переменная FACTORY_TICK_INTERVAL_SEC должна быть числом, сейчас там 'abc'. Исправь /data/.env». `ensure_data_dir()` ловит `PermissionError`/`OSError` при создании каталога и переводит в `FactoryError` с подсказкой про `FACTORY_DATA_DIR` — значение по умолчанию `/data` рассчитано на контейнер и на macOS без `sudo` не создаётся
+- [x] **Шаг 4.** Реализовать `clock.py`: `now_utc() -> datetime` (aware, UTC), `to_iso(dt) -> str`, `from_iso(s) -> datetime`
+- [x] **Шаг 5.** Тест `tests/test_errors.py`: `FactoryError("что", why="почему", what_to_do="что делать")` при печати даёт три строки в этом порядке
+- [x] **Шаг 6.** Реализовать `errors.py`: `FactoryError` + `ConfigError`, `DbError`, `ProviderError`, `LockError`
+- [x] **Шаг 7.** Тест `tests/test_logging.py`: строка лога — валидный JSON с полями `ts`, `level`, `msg`; значение с ключом, содержащим `token`/`key`/`secret`/`password`, заменено на `***`
+- [x] **Шаг 8.** Реализовать `logging.py`: `setup_logging()`, JSON-форматтер, фильтр секретов
+- [x] **Шаг 9.** `uv run pytest tests/test_paths.py tests/test_errors.py tests/test_logging.py -v` — всё зелёное
+- [x] **Шаг 10.** Коммит: `feat: пути, время, ошибки и структурные логи`
 
 ---
 
@@ -303,19 +303,19 @@ limits:
 **Файлы:** создать `migrations/001_init.sql`, `factory/core/db.py`; тест `tests/test_migrations.py`,
 фикстуры `tests/conftest.py`
 
-- [ ] **Шаг 1.** `tests/conftest.py`: фикстура `tmp_env` — подменяет `FACTORY_DATA_DIR`/`FACTORY_TMP_DIR`/`FACTORY_PROJECTS_DIR` на временные каталоги; фикстура `conn` — открытая база с применёнными миграциями; **автоиспользуемая (`autouse=True`) фикстура `no_network`** — подменяет `httpx.Client`/`httpx.AsyncClient` на транспорт, который на любой реальный запрос бросает `RuntimeError("Тест попытался сходить в сеть: {method} {url}. Внешние вызовы в тестах должны быть замоканы.")`. Тесты, которым нужен настоящий транспорт (их не будет на этом этапе), отключают её маркером
-- [ ] **Шаг 1а.** Тест `tests/test_no_network.py`: попытка `httpx.get("https://example.com")` внутри теста падает с этим сообщением. Это тест на сам предохранитель — без него фикстура может тихо перестать работать
-- [ ] **Шаг 2.** Тест `tests/test_migrations.py`:
+- [x] **Шаг 1.** `tests/conftest.py`: фикстура `tmp_env` — подменяет `FACTORY_DATA_DIR`/`FACTORY_TMP_DIR`/`FACTORY_PROJECTS_DIR` на временные каталоги; фикстура `conn` — открытая база с применёнными миграциями; **автоиспользуемая (`autouse=True`) фикстура `no_network`** — подменяет `httpx.Client`/`httpx.AsyncClient` на транспорт, который на любой реальный запрос бросает `RuntimeError("Тест попытался сходить в сеть: {method} {url}. Внешние вызовы в тестах должны быть замоканы.")`. Тесты, которым нужен настоящий транспорт (их не будет на этом этапе), отключают её маркером
+- [x] **Шаг 1а.** Тест `tests/test_no_network.py`: попытка `httpx.get("https://example.com")` внутри теста падает с этим сообщением. Это тест на сам предохранитель — без него фикстура может тихо перестать работать
+- [x] **Шаг 2.** Тест `tests/test_migrations.py`:
   - после `migrate()` существуют таблицы `projects, topics, posts, assets, comments, runs, rejections, meta`
   - `PRAGMA user_version` == 1
   - повторный `migrate()` не падает и ничего не меняет
   - `PRAGMA journal_mode` == `wal`
   - вставка двух постов с одинаковым `idem_key` даёт `IntegrityError`
-- [ ] **Шаг 3.** Запустить, убедиться что падает
-- [ ] **Шаг 4.** Написать `migrations/001_init.sql`: вся схема из спеки, плюс `meta(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`, плюс колонки `posts.factcheck_verdict TEXT`, `posts.factcheck_notes TEXT`, `posts.published_at TEXT`, плюс индексы из спеки и `CREATE INDEX idx_posts_published ON posts(project_id, published_at)`
-- [ ] **Шаг 5.** Реализовать `db.py`: `connect()` (создаёт каталог, `PRAGMA journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `row_factory=sqlite3.Row`), `migrate(conn)` (читает `PRAGMA user_version`, применяет по порядку файлы `NNN_*.sql` с номером выше текущего, каждый в транзакции, обновляет `user_version`), контекст-менеджер `transaction(conn)`
-- [ ] **Шаг 6.** `uv run pytest tests/test_migrations.py -v` — зелёное
-- [ ] **Шаг 7.** Коммит: `feat: схема базы и применение миграций`
+- [x] **Шаг 3.** Запустить, убедиться что падает
+- [x] **Шаг 4.** Написать `migrations/001_init.sql`: вся схема из спеки, плюс `meta(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`, плюс колонки `posts.factcheck_verdict TEXT`, `posts.factcheck_notes TEXT`, `posts.published_at TEXT`, плюс индексы из спеки и `CREATE INDEX idx_posts_published ON posts(project_id, published_at)`
+- [x] **Шаг 5.** Реализовать `db.py`: `connect()` (создаёт каталог, `PRAGMA journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `row_factory=sqlite3.Row`), `migrate(conn)` (читает `PRAGMA user_version`, применяет по порядку файлы `NNN_*.sql` с номером выше текущего, каждый в транзакции, обновляет `user_version`), контекст-менеджер `transaction(conn)`
+- [x] **Шаг 6.** `uv run pytest tests/test_migrations.py -v` — зелёное
+- [x] **Шаг 7.** Коммит: `feat: схема базы и применение миграций`
 
 ---
 

@@ -158,7 +158,7 @@ class TestEnsureDataDir:
 
     def test_existing_but_unwritable_directory_is_caught(self, monkeypatch, tmp_path):
         """Каталог есть, но прав на запись нет — база не откроется, надо сказать заранее."""
-        target = tmp_path / "data"
+        target = tmp_path / "locked-data"
         target.mkdir()
         target.chmod(0o500)
         monkeypatch.setenv("FACTORY_DATA_DIR", str(target))
