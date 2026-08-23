@@ -175,10 +175,12 @@ CREATE TABLE posts (
     next_attempt_at TEXT,
     scheduled_at  TEXT,
     external_id   TEXT,                         -- vk post id после публикации
+    published_at  TEXT,                         -- момент публикации, пишется ОДИН раз
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
 CREATE INDEX idx_posts_active ON posts(state, next_attempt_at);
+CREATE INDEX idx_posts_published ON posts(project_id, published_at);
 
 CREATE TABLE assets (
     id            INTEGER PRIMARY KEY,
@@ -375,8 +377,14 @@ Telegram-бот отправляет владельцу:
 Версия API — из конфига, по умолчанию `5.199`.
 Токен — из env, никогда не в конфиге и не в логах.
 
-После успеха: `external_id`, состояние `published`, тема → `used`,
-файлы из `/dev/shm` удалить.
+После успеха: `external_id`, `published_at`, состояние `published`, тема → `used`,
+файлы поста из `FACTORY_TMP_DIR` удалить.
+
+`published_at` пишется ровно один раз и больше не меняется. Дневной лимит
+`limits.posts_per_day` считается по нему, а НЕ по `updated_at`: `updated_at`
+меняется при любой правке строки, и пост, опубликованный вчера в 23:50, съел бы
+сегодняшний слот, если сегодня его строку тронул `post retry` или воркер
+комментариев.
 
 ---
 
