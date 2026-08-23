@@ -21,6 +21,27 @@ def stored(conn) -> dict:
     return json.loads(row["value"]) if row else {}
 
 
+def put_lock(conn, *, expires_at, holder="чужой-хост", pid=999999, token="чужой-токен") -> dict:
+    """Кладёт в базу блокировку от имени другого процесса."""
+    payload = {"holder": holder, "pid": pid, "token": token, "expires_at": to_iso(expires_at)}
+    with db.write_transaction(conn):
+        conn.execute(
+            "INSERT INTO meta (key, value, updated_at) VALUES ('tick_lock', ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (json.dumps(payload, ensure_ascii=False), to_iso(now_utc())),
+        )
+    return payload
+
+
+def impersonate_another_process(monkeypatch) -> None:
+    """Делает текущий процесс «чужим» для проверок владельца.
+
+    В Docker воркер всегда PID 1, а имя контейнера не меняется при перезапуске,
+    поэтому пары (хост, pid) для опознания процесса недостаточно — отсюда токен.
+    """
+    monkeypatch.setattr(lock, "_PROCESS_TOKEN", "другой-токен")
+
+
 class TestAcquire:
     def test_first_holder_gets_it(self, conn):
         with lock.tick_lock(conn) as held:
@@ -56,31 +77,45 @@ class TestAcquire:
         finally:
             other.close()
 
-    def test_lock_survives_an_exception_inside_the_block(self, conn):
+    def test_lock_is_released_even_when_the_block_raises(self, conn):
         with pytest.raises(ValueError):
             with lock.tick_lock(conn):
                 raise ValueError("тик упал")
 
         assert stored(conn) == {}, "блокировка должна сниматься даже при исключении"
 
-    def test_acquired_lock_expires_in_the_future(self, conn, monkeypatch):
-        monkeypatch.setenv("FACTORY_LOCK_TTL_SEC", "1800")
+    def test_expiry_is_taken_from_the_configured_ttl(self, conn, monkeypatch):
+        """Значение нарочно не совпадает с умолчанием, иначе тест ничего не проверяет."""
+        monkeypatch.setenv("FACTORY_LOCK_TTL_SEC", "900")
         with lock.tick_lock(conn):
             expires = from_iso(stored(conn)["expires_at"])
-            assert now_utc() < expires <= now_utc() + timedelta(seconds=1800)
+            assert now_utc() + timedelta(seconds=880) < expires <= now_utc() + timedelta(seconds=900)
+
+    def test_release_leaves_alone_a_lock_that_is_no_longer_ours(self, conn, monkeypatch):
+        """Наш тик подвис, блокировку перехватили, и только потом мы дошли до выхода.
+
+        Снять её означало бы пустить третий тик рядом со вторым. В Docker воркер
+        всегда PID 1 на неизменном хосте, поэтому опознание идёт по токену
+        процесса — без него эта проверка в бою была бы безусловно истинной.
+        """
+        with lock.tick_lock(conn):
+            impersonate_another_process(monkeypatch)
+            taken_over = put_lock(conn, expires_at=now_utc() + timedelta(minutes=10))
+
+        assert stored(conn) == taken_over
 
 
 class TestStaleLock:
     def test_expired_lock_is_taken_over(self, conn):
         """После kill -9 запись остаётся висеть. Ждать полчаса нельзя."""
-        lock._write(conn, holder="умерший-процесс", pid=999999, expires_at=now_utc() - timedelta(seconds=1))
+        put_lock(conn, holder="умерший-процесс", pid=999999, expires_at=now_utc() - timedelta(seconds=1))
 
         with lock.tick_lock(conn) as held:
             assert held is True
             assert stored(conn)["pid"] == os.getpid()
 
     def test_live_lock_is_not_taken_over(self, conn):
-        lock._write(conn, holder="живой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
+        put_lock(conn, holder="живой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
 
         with lock.tick_lock(conn) as held:
             assert held is False
@@ -92,16 +127,16 @@ class TestStaleLock:
         значении TTL и не проверял ничего.
         """
         monkeypatch.setenv("FACTORY_LOCK_TTL_SEC", "1")
-        lock._write(conn, holder="умерший", pid=999999, expires_at=now_utc() - timedelta(hours=5))
+        put_lock(conn, holder="умерший", pid=999999, expires_at=now_utc() - timedelta(hours=5))
 
         with lock.tick_lock(conn) as held:
             assert held is True
             expires = from_iso(stored(conn)["expires_at"])
             assert now_utc() - timedelta(seconds=2) < expires <= now_utc() + timedelta(seconds=1)
 
-    def test_takeover_does_not_delete_the_lock_of_the_process_that_stole_it(self, conn):
+    def test_process_that_took_over_releases_the_lock_afterwards(self, conn):
         """Перехватчик обязан снять блокировку за собой, а не оставить висеть."""
-        lock._write(conn, holder="умерший", pid=999999, expires_at=now_utc() - timedelta(hours=1))
+        put_lock(conn, holder="умерший", pid=999999, expires_at=now_utc() - timedelta(hours=1))
 
         with lock.tick_lock(conn):
             pass
@@ -133,7 +168,7 @@ class TestRefresh:
 
     def test_refresh_by_a_stranger_is_refused(self, conn):
         """Иначе чужой процесс продлит блокировку, которую сам не держит."""
-        lock._write(conn, holder="чужой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
+        put_lock(conn, holder="чужой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
 
         with pytest.raises(LockError, match="не принадлежит"):
             lock.refresh(conn)
@@ -142,10 +177,46 @@ class TestRefresh:
         with pytest.raises(LockError):
             lock.refresh(conn)
 
+    def test_refresh_does_not_resurrect_a_lock_that_was_taken_over(self, conn, monkeypatch):
+        """Регрессия на гонку: два тика одновременно считали, что держат блокировку.
+
+        Раньше refresh() читал запись, проверял владельца и писал в трёх разных
+        транзакциях. За время между чтением и записью наша блокировка могла
+        протухнуть, другой тик — перехватить её и начать работу, а мы затирали
+        его запись своей. Дальше оба тика брали одни и те же темы и публиковали
+        одни и те же посты — ровно то, что SPEC.md называет недопустимым.
+        """
+        with lock.tick_lock(conn):
+            impersonate_another_process(monkeypatch)
+            stolen = put_lock(conn, expires_at=now_utc() + timedelta(minutes=10))
+
+            with pytest.raises(LockError, match="не принадлежит"):
+                lock.refresh(conn)
+
+            assert stored(conn) == stolen, "refresh затёр блокировку перехватившего тика"
+
+    def test_refresh_extends_our_own_lock_even_after_its_ttl_ran_out(self, conn):
+        """Тик может не уложиться в TTL. Пока блокировку не перехватили — продлеваем.
+
+        Это безопасно: перехват идёт через тот же BEGIN IMMEDIATE, поэтому оба
+        пути выстраиваются в очередь и одновременно выиграть не могут.
+        """
+        with lock.tick_lock(conn):
+            expired = {**stored(conn), "expires_at": to_iso(now_utc() - timedelta(minutes=5))}
+            with db.write_transaction(conn):
+                conn.execute(
+                    "UPDATE meta SET value = ? WHERE key = 'tick_lock'",
+                    (json.dumps(expired, ensure_ascii=False),),
+                )
+
+            lock.refresh(conn)
+
+            assert from_iso(stored(conn)["expires_at"]) > now_utc()
+
 
 class TestForceUnlock:
     def test_removes_a_live_lock(self, conn):
-        lock._write(conn, holder="живой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
+        put_lock(conn, holder="живой", pid=999999, expires_at=now_utc() + timedelta(minutes=10))
 
         assert lock.force_unlock(conn) is True
         assert stored(conn) == {}
@@ -173,6 +244,20 @@ class TestHeartbeat:
 
         age = lock.heartbeat_age_sec(conn)
         assert 3 * 3600 - 5 < age < 3 * 3600 + 5
+
+    def test_just_under_two_hours_is_not_yet_stale(self, conn):
+        """Парный к тесту ниже: только пара 1:59 / 2:01 фиксирует сам порог.
+
+        По отдельности каждый из них проходит при любом пороге от нуля до двух
+        часов, то есть не проверяет ничего.
+        """
+        with db.write_transaction(conn):
+            conn.execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(hours=1, minutes=59)), to_iso(now_utc())),
+            )
+
+        assert lock.heartbeat_is_stale(conn) is False
 
     def test_is_stale_uses_the_two_hour_threshold_from_the_spec(self, conn):
         with db.write_transaction(conn):

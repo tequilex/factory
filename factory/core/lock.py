@@ -15,6 +15,7 @@ import json
 import os
 import socket
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -33,21 +34,37 @@ HEARTBEAT_STALE_AFTER_SEC = 2 * 3600
 log = get_logger(__name__)
 
 
-def _identity() -> tuple[str, int]:
-    return socket.gethostname(), os.getpid()
+# Regenerated on every start. Hostname plus PID is not enough to identify a
+# process: in Docker the worker is always PID 1 and the container hostname is
+# stable across restarts, so a process killed with -9 and its replacement would
+# look identical. Ownership checks would then silently pass for the wrong process.
+_PROCESS_TOKEN = uuid.uuid4().hex
 
 
-def _write(conn: sqlite3.Connection, *, holder: str, pid: int, expires_at: datetime) -> None:
-    payload = json.dumps(
-        {"holder": holder, "pid": pid, "expires_at": to_iso(expires_at)},
-        ensure_ascii=False,
-    )
-    with db.write_transaction(conn):
-        conn.execute(
-            "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (LOCK_KEY, payload, to_iso(now_utc())),
-        )
+def _identity() -> dict[str, object]:
+    return {"holder": socket.gethostname(), "pid": os.getpid(), "token": _PROCESS_TOKEN}
+
+
+def _is_ours(payload: dict | None) -> bool:
+    if payload is None:
+        return False
+    mine = _identity()
+    return all(payload.get(key) == value for key, value in mine.items())
+
+
+def _payload(expires_at: datetime) -> str:
+    return json.dumps({**_identity(), "expires_at": to_iso(expires_at)}, ensure_ascii=False)
+
+
+UPSERT_META = (
+    "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
+    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+)
+
+
+def _store(conn: sqlite3.Connection, payload: str) -> None:
+    """Write the lock row. Caller must already hold a write transaction."""
+    conn.execute(UPSERT_META, (LOCK_KEY, payload, to_iso(now_utc())))
 
 
 def _parse(row: sqlite3.Row | None) -> dict | None:
@@ -81,7 +98,6 @@ def _try_acquire(conn: sqlite3.Connection) -> bool:
     Read and write happen inside one ``BEGIN IMMEDIATE`` so two ticks racing here
     cannot both conclude the lock is free.
     """
-    holder, pid = _identity()
     expires_at = now_utc() + timedelta(seconds=paths.lock_ttl_sec())
 
     with db.write_transaction(conn):
@@ -97,18 +113,7 @@ def _try_acquire(conn: sqlite3.Connection) -> bool:
                 extra={"previous": payload},
             )
 
-        conn.execute(
-            "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (
-                LOCK_KEY,
-                json.dumps(
-                    {"holder": holder, "pid": pid, "expires_at": to_iso(expires_at)},
-                    ensure_ascii=False,
-                ),
-                to_iso(now_utc()),
-            ),
-        )
+        _store(conn, _payload(expires_at))
         return True
 
 
@@ -123,15 +128,17 @@ def _release(conn: sqlite3.Connection) -> None:
     code does not depend on SQLite being compiled with the JSON1 extension —
     the target device is whatever ARM build happens to be installed.
     """
-    holder, pid = _identity()
     with db.write_transaction(conn):
         payload = _parse(
             conn.execute("SELECT value FROM meta WHERE key = ?", (LOCK_KEY,)).fetchone()
         )
-        if payload is None:
-            return
-        if payload.get("holder") == holder and payload.get("pid") == pid:
+        if _is_ours(payload):
             conn.execute("DELETE FROM meta WHERE key = ?", (LOCK_KEY,))
+        elif payload is not None:
+            log.warning(
+                "блокировка уже не наша, снимать не будем",
+                extra={"current": payload},
+            )
 
 
 @contextmanager
@@ -159,32 +166,46 @@ def refresh(conn: sqlite3.Connection) -> None:
     """Push the expiry forward while a long tick is still working.
 
     Called between posts, so a slow tick never has its lock stolen mid-flight.
+
+    Read, ownership check and write must all happen inside **one** transaction.
+    Splitting them opens a window in which our lock expires, another tick takes it
+    over, and we then overwrite that tick's row with our own — leaving two ticks
+    both believing they hold the lock, publishing the same posts. With everything
+    under one ``BEGIN IMMEDIATE`` the two paths serialize: either we extend first
+    and the other tick sees a live lock, or it takes over first and we raise here.
     """
-    holder, pid = _identity()
-    payload = _read(conn)
-
-    if payload is None:
-        raise LockError(
-            "Не удалось продлить блокировку тика: её больше нет в базе.",
-            why="Запись была снята или повреждена, пока тик работал.",
-            what_to_do="Дождись следующего тика. Если повторяется — factory doctor.",
-        )
-    if payload.get("holder") != holder or payload.get("pid") != pid:
-        raise LockError(
-            "Не удалось продлить блокировку тика: она не принадлежит этому процессу.",
-            why=f"Блокировку держит {payload.get('holder')}:{payload.get('pid')}.",
-            what_to_do=(
-                "Скорее всего, предыдущий тик подвис и его блокировку перехватили. "
-                "Этот процесс должен завершиться. См. RUNBOOK.md → «Когда сломалось»."
-            ),
+    with db.write_transaction(conn):
+        payload = _parse(
+            conn.execute("SELECT value FROM meta WHERE key = ?", (LOCK_KEY,)).fetchone()
         )
 
-    _write(
-        conn,
-        holder=holder,
-        pid=pid,
-        expires_at=now_utc() + timedelta(seconds=paths.lock_ttl_sec()),
-    )
+        if payload is None:
+            raise LockError(
+                "Не удалось продлить блокировку тика: её больше нет в базе.",
+                why="Запись была снята или повреждена, пока тик работал.",
+                what_to_do="Дождись следующего тика. Если повторяется — factory doctor.",
+            )
+
+        if not _is_ours(payload):
+            raise LockError(
+                "Не удалось продлить блокировку тика: она не принадлежит этому процессу.",
+                why=f"Блокировку держит {payload.get('holder')}:{payload.get('pid')}.",
+                what_to_do=(
+                    "Скорее всего, предыдущий тик подвис и его блокировку перехватили. "
+                    "Этот процесс должен завершиться. См. RUNBOOK.md → «Когда сломалось»."
+                ),
+            )
+
+        if _is_expired(payload):
+            # Still ours, so nobody has taken over yet and extending is safe: any
+            # competing tick has to pass through the same write lock we hold here.
+            # Worth a warning though — a tick that outruns its TTL is a symptom.
+            log.warning(
+                "тик работает дольше своего TTL, блокировка продлена",
+                extra={"ttl_sec": paths.lock_ttl_sec()},
+            )
+
+        _store(conn, _payload(now_utc() + timedelta(seconds=paths.lock_ttl_sec())))
 
 
 def force_unlock(conn: sqlite3.Connection) -> bool:
@@ -198,11 +219,7 @@ def write_heartbeat(conn: sqlite3.Connection) -> None:
     """Record that a tick finished successfully. Read by the Docker healthcheck."""
     stamp = to_iso(now_utc())
     with db.write_transaction(conn):
-        conn.execute(
-            "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (HEARTBEAT_KEY, stamp, stamp),
-        )
+        conn.execute(UPSERT_META, (HEARTBEAT_KEY, stamp, stamp))
 
 
 def heartbeat_age_sec(conn: sqlite3.Connection) -> float | None:
