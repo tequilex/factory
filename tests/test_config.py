@@ -53,6 +53,31 @@ class TestDemoProject:
         assert len(cfg.style_examples()) == 2
         assert "Кристина" in cfg.voice()
 
+    def test_prompt_files_contain_no_meta_commentary(self, demo_project):
+        """Эти файлы уходят в нейросеть дословно.
+
+        Пояснение вида «Пример поста для few-shot» модель прочитает как часть
+        задания и начнёт писать про примеры вместо постов. Объяснения для
+        человека живут в projects/<slug>/README.md.
+        """
+        cfg = config.load_project("demo")
+        forbidden = ["few-shot", "Этап", "LLM", "провайдер", "config.yaml", "заглушк"]
+
+        texts = {"voice.md": cfg.voice()}
+        for index, example in enumerate(cfg.style_examples(), 1):
+            texts[f"example_{index}.md"] = example
+
+        for name, text in texts.items():
+            for marker in forbidden:
+                assert marker not in text, f"в {name} попал служебный текст: «{marker}»"
+
+    def test_examples_can_be_switched_off_by_renaming(self, demo_project):
+        """RUNBOOK обещает, что .md.off выключает пример без удаления файла."""
+        example = demo_project / "prompts" / "examples" / "example_1.md"
+        example.rename(example.with_suffix(".md.off"))
+
+        assert len(config.load_project("demo").style_examples()) == 1
+
     def test_schedule_is_parsed_into_times(self, demo_project):
         cfg = config.load_project("demo")
 

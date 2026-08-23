@@ -21,8 +21,11 @@ from factory.core import db
 from factory.core.errors import DbError
 from tests.conftest import insert_post, insert_project, insert_topic
 
-# Пересборка posts с расширенным списком состояний. Это шаблон для любой будущей
-# миграции, меняющей CHECK, — из него и надо будет копировать.
+# Пересборка posts с расширенным списком состояний.
+#
+# Шаблон для копирования лежит в CLAUDE.md → «Как менять схему базы», вместе с
+# описанием трёх граблей. Здесь — его исполняемая копия: если шаблон перестанет
+# работать, это упадёт тестом, а не на боевой базе.
 REBUILD_POSTS_WITH_NEW_STATE = """
 CREATE TABLE posts_new (
     id            INTEGER PRIMARY KEY,
