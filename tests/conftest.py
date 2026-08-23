@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -19,6 +20,8 @@ import pytest
 
 from factory.core import db, paths
 from factory.core.clock import now_utc, to_iso
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +63,18 @@ def no_network(request, monkeypatch):
 
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
+
+
+@pytest.fixture
+def demo_project(tmp_env) -> Path:
+    """Копирует настоящий projects/demo во временный каталог проектов.
+
+    Тесты работают с боевым конфигом, но в изоляции: правка теста не может
+    испортить файлы в репозитории.
+    """
+    target = paths.projects_dir() / "demo"
+    shutil.copytree(REPO_ROOT / "projects" / "demo", target)
+    return target
 
 
 @pytest.fixture

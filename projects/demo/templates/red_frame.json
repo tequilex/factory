@@ -1,0 +1,33 @@
+{
+  "_comment": "Шаблон обложки. Используется на Этапе 2 модулем compose/cover.py. Все координаты в пикселях от левого верхнего угла.",
+
+  "canvas": {
+    "width": 1080,
+    "height": 1350,
+    "background": "#000000"
+  },
+
+  "frame": {
+    "color": "#D32F2F",
+    "width_px": 28
+  },
+
+  "plate": {
+    "x": 64,
+    "y": 64,
+    "width": 952,
+    "height": 420,
+    "color": "#FFFFFF",
+    "padding": 36
+  },
+
+  "title": {
+    "color": "#111111",
+    "font": "bold.ttf",
+    "size_min": 44,
+    "size_max": 112,
+    "line_spacing": 1.12,
+    "align": "left",
+    "valign": "center"
+  }
+}

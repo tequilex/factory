@@ -337,14 +337,14 @@ limits:
 `projects/demo/prompts/examples/example_2.md`, `projects/demo/templates/red_frame.json`;
 тест `tests/test_config.py`
 
-- [ ] **Шаг 1.** Тест: `projects/demo/config.yaml` загружается, `cfg.limits.queue_buffer == 6`, `cfg.limits.posts_per_day == 2`, `cfg.review.mode == "auto"`
-- [ ] **Шаг 2.** Тест: конфиг без секции `vk` даёт `ConfigError`, в тексте которого есть имя файла, слово `vk` и подсказка что делать — а не питоновский трейсбек
-- [ ] **Шаг 3.** Тест: `llm.provider: nonexistent` даёт `ConfigError` со списком доступных провайдеров
-- [ ] **Шаг 4.** Тест: `resolve_secret("VK_TOKEN_DEMO")` при отсутствии переменной даёт ошибку с текстом из спеки («Не найден токен... Ожидается переменная... См. RUNBOOK.md»)
-- [ ] **Шаг 5.** Запустить, убедиться что падает
-- [ ] **Шаг 6.** Реализовать `config.py`: pydantic-модели `VkCfg`, `PersonaCfg`, `LlmCfg`, `ImageCfg`, `PublisherCfg`, `ContentCfg`, `ReviewCfg`, `LimitsCfg`, `ProjectConfig`; `load_project(slug)`; `resolve_secret(env_name, context)`; перевод `ValidationError` в `ConfigError` с русским текстом
-- [ ] **Шаг 7.** Создать файлы проекта `demo` (конфиг — как в разделе «Ключевые контракты», `voice.md` и примеры — короткие заглушки, `red_frame.json` — координаты плашки, цвет и толщина рамки, диапазон кегля)
-- [ ] **Шаг 8.** Тесты зелёные, коммит: `feat: конфигурация проектов и учебный проект demo`
+- [x] **Шаг 1.** Тест: `projects/demo/config.yaml` загружается, `cfg.limits.queue_buffer == 6`, `cfg.limits.posts_per_day == 2`, `cfg.review.mode == "auto"`
+- [x] **Шаг 2.** Тест: конфиг без секции `vk` даёт `ConfigError`, в тексте которого есть имя файла, слово `vk` и подсказка что делать — а не питоновский трейсбек
+- [x] **Шаг 3.** Тест: `llm.provider: nonexistent` даёт `ConfigError` со списком доступных провайдеров
+- [x] **Шаг 4.** Тест: `resolve_secret("VK_TOKEN_DEMO")` при отсутствии переменной даёт ошибку с текстом из спеки («Не найден токен... Ожидается переменная... См. RUNBOOK.md»)
+- [x] **Шаг 5.** Запустить, убедиться что падает
+- [x] **Шаг 6.** Реализовать `config.py`: pydantic-модели `VkCfg`, `PersonaCfg`, `LlmCfg`, `ImageCfg`, `PublisherCfg`, `ContentCfg`, `ReviewCfg`, `LimitsCfg`, `ProjectConfig`; `load_project(slug)`; `resolve_secret(env_name, context)`; перевод `ValidationError` в `ConfigError` с русским текстом
+- [x] **Шаг 7.** Создать файлы проекта `demo` (конфиг — как в разделе «Ключевые контракты», `voice.md` и примеры — короткие заглушки, `red_frame.json` — координаты плашки, цвет и толщина рамки, диапазон кегля)
+- [x] **Шаг 8.** Тесты зелёные, коммит: `feat: конфигурация проектов и учебный проект demo`
 
 ---
 

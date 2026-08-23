@@ -1,0 +1,49 @@
+# Учебный проект. Все провайдеры — заглушки: ни один ключ не нужен,
+# ни одного запроса наружу, ни одного потраченного цента.
+#
+# Чтобы завести настоящую группу: скопируй этот каталог под новым именем,
+# поменяй slug, заполни vk.group_id и токен, замени провайдеров на боевые.
+# Пошагово — в RUNBOOK.md → «Новая группа».
+
+slug: demo
+
+vk:
+  group_id: 0                    # id тестовой группы; 0 — заглушка
+  token_env: VK_TOKEN_DEMO       # имя переменной в /data/.env, не сам токен
+  api_version: "5.199"
+  schedule: ["19:30", "21:00"]   # во сколько публиковать, в поясе ниже
+  timezone: "Europe/Moscow"
+
+persona:
+  name: "Кристина"
+  voice_file: prompts/voice.md
+  style_examples: prompts/examples/
+
+llm:
+  provider: stub
+  model: "stub"
+  factcheck_model: "stub"
+
+image:
+  provider: stub
+  model: "stub"
+  inline_count: 3                # сколько картинок кроме обложки
+  cover_template: templates/red_frame.json
+  scene_style: "cinematic photo, overcast light, 35mm, shallow depth of field"
+
+publisher:
+  provider: stub
+
+content:
+  post_structure: [hook, story, detail, question]
+  target_length: [900, 1400]
+  factcheck: strict              # strict | light | off
+
+review:
+  mode: auto                     # auto — одобряет сам; telegram — ждёт кнопки
+  auto_after_n_approved: 40
+
+limits:
+  posts_per_day: 2               # сколько ПУБЛИКУЕТСЯ в сутки
+  queue_buffer: 6                # сколько постов держать в работе; правило: posts_per_day × 3
+  max_cost_per_post_usd: 0.40
