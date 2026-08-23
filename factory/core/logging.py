@@ -107,6 +107,27 @@ class JsonFormatter(logging.Formatter):
         return scrub_text(rendered)
 
 
+class _SafeExtras(logging.LoggerAdapter):
+    """Keeps ``extra`` from colliding with LogRecord's own attributes.
+
+    ``logging`` raises ``KeyError: Attempt to overwrite 'created' in LogRecord``
+    when an extra field is named like a built-in one — and ``created``,
+    ``module``, ``name``, ``args``, ``filename`` are all names a caller would
+    naturally reach for. Worse, the crash only happens when the level is actually
+    enabled, so it hides during development and takes the worker down in
+    production. Colliding names get an ``f_`` prefix instead.
+    """
+
+    def process(self, msg, kwargs):
+        extra = kwargs.get("extra")
+        if extra:
+            kwargs["extra"] = {
+                (f"f_{key}" if key in _RESERVED_RECORD_FIELDS or key in {"message", "asctime"} else key): value
+                for key, value in extra.items()
+            }
+        return msg, kwargs
+
+
 def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
     """Install the JSON handler on the root logger, replacing any previous one.
 
@@ -122,5 +143,5 @@ def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
     root.setLevel(level.upper())
 
 
-def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(name)
+def get_logger(name: str) -> logging.LoggerAdapter:
+    return _SafeExtras(logging.getLogger(name), {})

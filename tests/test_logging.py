@@ -28,10 +28,15 @@ class LogCapture:
 
 @pytest.fixture
 def captured():
+    root = logging.getLogger()
+    previous_level = root.level
     stream = io.StringIO()
     setup_logging(level="DEBUG", stream=stream)
     yield LogCapture(stream)
-    logging.getLogger().handlers.clear()
+    # Уровень тоже надо вернуть: иначе следующие тесты пойдут с DEBUG и поведение
+    # логирования в них будет отличаться от боевого.
+    root.handlers.clear()
+    root.setLevel(previous_level)
 
 
 def test_line_is_valid_json_with_required_fields(captured):
@@ -127,6 +132,29 @@ def test_non_secret_env_values_are_left_alone(captured, monkeypatch):
     get_logger("test").info("данные в /srv/factory-data")
 
     assert captured.only()["msg"] == "данные в /srv/factory-data"
+
+
+@pytest.mark.parametrize("field", ["created", "module", "name", "filename", "args", "message"])
+def test_field_names_that_clash_with_logrecord_do_not_crash(captured, field):
+    """logging падает с KeyError, если extra называется как поле LogRecord.
+
+    Ловушка в том, что падение происходит только когда уровень логирования
+    действительно включён: в разработке молчит, в бою роняет воркер. Имена
+    «created», «module», «name» — ровно те, что просятся сами.
+    """
+    get_logger("test").info("тик завершён", extra={field: 42})
+
+    entry = captured.only()
+    assert entry[f"f_{field}"] == 42
+    assert entry["msg"] == "тик завершён"
+
+
+def test_non_clashing_fields_keep_their_names(captured):
+    get_logger("test").info("пост создан", extra={"post_id": 7, "created_at": "вчера"})
+
+    entry = captured.only()
+    assert entry["post_id"] == 7
+    assert entry["created_at"] == "вчера"
 
 
 def test_setup_is_idempotent():

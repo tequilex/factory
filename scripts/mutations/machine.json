@@ -1,0 +1,94 @@
+{
+  "module": "factory/core/machine.py",
+  "tests": "tests/test_multistep.py tests/test_queue.py",
+  "mutations": {
+    "гнать пост по всей цепочке за один тик": [
+      "    limit = max_steps if max_steps is not None else paths.max_steps_per_tick()",
+      "    limit = max_steps if max_steps is not None else 99"
+    ],
+    "коммитить состояние один раз в конце цепочки, а не после каждого шага": [
+      "        commit_transition(conn, post, result.next_state)\n        done += 1\n        post = reload_post(conn, post.id)",
+      "        done += 1\n        post = reload_post(conn, post.id)\n        commit_transition(conn, post, result.next_state)"
+    ],
+    "считать WAITING ошибкой": [
+      "        if result.outcome is Outcome.WAITING:\n            record_wait(conn, post, result.reason)\n            break",
+      "        if result.outcome is Outcome.WAITING:\n            record_failure(conn, post, RuntimeError(result.reason or 'ожидание'))\n            break"
+    ],
+    "продолжать цепочку после ошибки": [
+      "            record_failure(conn, post, exc)\n            break",
+      "            record_failure(conn, post, exc)\n            post = reload_post(conn, post.id)\n            continue"
+    ],
+    "не наращивать retry_count": [
+      "    retry_count = post.retry_count + 1",
+      "    retry_count = post.retry_count"
+    ],
+    "изменить порог перевода в failed": [
+      "MAX_RETRIES = 5",
+      "MAX_RETRIES = 9"
+    ],
+    "изменить базу экспоненциальной паузы": [
+      "BACKOFF_BASE_SEC = 600",
+      "BACKOFF_BASE_SEC = 300"
+    ],
+    "сделать паузу постоянной вместо растущей": [
+      "    return min(BACKOFF_BASE_SEC * 2 ** max(0, retry_count - 1), BACKOFF_CAP_SEC)",
+      "    return BACKOFF_BASE_SEC"
+    ],
+    "изменить потолок паузы": [
+      "BACKOFF_CAP_SEC = 6 * 3600",
+      "BACKOFF_CAP_SEC = 12 * 3600"
+    ],
+    "не очищать ошибку после успешного шага": [
+      "            \"UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, \"",
+      "            \"UPDATE posts SET state = ?, retry_count = retry_count, last_error = last_error, \""
+    ],
+    "брать посты, которым ещё рано": [
+      "        \"AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY id\",",
+      "        \"AND (next_attempt_at IS NULL OR next_attempt_at <= ? OR 1=1) ORDER BY id\","
+    ],
+    "брать в работу терминальные посты": [
+      "        f\"SELECT * FROM posts WHERE project_id = ? AND state NOT IN ({placeholders}) \"\n        \"AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY id\",",
+      "        f\"SELECT * FROM posts WHERE project_id = ? AND (state NOT IN ({placeholders}) OR 1=1) \"\n        \"AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY id\","
+    ],
+    "считать терминальные посты занимающими буфер": [
+      "        f\"SELECT COUNT(*) FROM posts WHERE project_id = ? AND state NOT IN ({placeholders})\",",
+      "        f\"SELECT COUNT(*) FROM posts WHERE project_id = ? AND (state NOT IN ({placeholders}) OR 1=1)\","
+    ],
+    "игнорировать queue_buffer из конфига": [
+      "    while in_flight(conn, project.id) < config.limits.queue_buffer:",
+      "    while in_flight(conn, project.id) < 2:"
+    ],
+    "не учитывать номер попытки в idem_key": [
+      "                f\"{project.slug}:{topic_id}:{attempt}\",",
+      "                f\"{project.slug}:{topic_id}:0\","
+    ],
+    "разделить захват темы и создание поста на две транзакции": [
+      "    stamp = to_iso(now_utc())\n    with db.write_transaction(conn):\n        topic_id = _claim_locked(conn, project.id)\n        if topic_id is None:\n            return None\n\n        attempt = attempts_for_topic(conn, topic_id)",
+      "    stamp = to_iso(now_utc())\n    topic_id = claim_free_topic(conn, project.id)\n    if topic_id is None:\n        return None\n    with db.write_transaction(conn):\n        attempt = attempts_for_topic(conn, topic_id)"
+    ],
+    "брать темы чужого проекта": [
+      "        \"  SELECT id FROM topics WHERE project_id = ? AND status = ? ORDER BY id LIMIT 1\"",
+      "        \"  SELECT id FROM topics WHERE (project_id = ? OR 1=1) AND status = ? ORDER BY id LIMIT 1\""
+    ],
+    "не проверять статус темы при захвате": [
+      "        (TopicStatus.TAKEN, project_id, TopicStatus.FREE),",
+      "        (TopicStatus.TAKEN, project_id, TopicStatus.TAKEN),"
+    ],
+    "падать на первом битом конфиге проекта": [
+      "            except FactoryError as exc:",
+      "            except ZeroDivisionError as exc:"
+    ],
+    "работать без блокировки тика": [
+      "        if not acquired:\n            summary[\"skipped\"] = True\n            return summary",
+      "        if False:\n            summary[\"skipped\"] = True\n            return summary"
+    ],
+    "не писать хартбит": [
+      "        lock.write_heartbeat(conn)",
+      "        pass"
+    ],
+    "молчать про отключённое расписание": [
+      "    if paths.ignore_schedule():\n        log.warning(",
+      "    if False:\n        log.warning("
+    ]
+  }
+}
