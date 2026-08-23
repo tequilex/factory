@@ -323,10 +323,10 @@ limits:
 
 **Файлы:** создать `factory/core/models.py`; тест `tests/test_models.py`
 
-- [ ] **Шаг 1.** Тест: `State.TERMINAL` содержит ровно `published/failed/rejected`; `next_state("queued") == "text_ready"`; `next_state("published")` бросает ошибку; `Post.from_row(row)` заполняет все поля
-- [ ] **Шаг 2.** Запустить, убедиться что падает
-- [ ] **Шаг 3.** Реализовать `models.py`: `State` (константы + `TERMINAL` + `TRANSITIONS` + `next_state()`), dataclasses `Project`, `Topic`, `Post`, `Asset`, `Run`, `Rejection` с методами `from_row`
-- [ ] **Шаг 4.** Тесты зелёные, коммит: `feat: модели данных и карта переходов`
+- [x] **Шаг 1.** Тест: `State.TERMINAL` содержит ровно `published/failed/rejected`; `next_state("queued") == "text_ready"`; `next_state("published")` бросает ошибку; `Post.from_row(row)` заполняет все поля
+- [x] **Шаг 2.** Запустить, убедиться что падает
+- [x] **Шаг 3.** Реализовать `models.py`: `State` (константы + `TERMINAL` + `TRANSITIONS` + `next_state()`), dataclasses `Project`, `Topic`, `Post`, `Asset`, `Run`, `Rejection` с методами `from_row`
+- [x] **Шаг 4.** Тесты зелёные, коммит: `feat: модели данных и карта переходов`
 
 ---
 
