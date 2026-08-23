@@ -134,11 +134,44 @@ class TestStubLLM:
 
         assert first == second
 
-    def test_different_input_gives_different_output(self):
+    def test_title_comes_from_the_topic(self):
+        """Заглушка не знает тематику проекта и брать заголовок ей больше неоткуда.
+
+        Захардкоженные заголовки означали бы знание о нише внутри providers/ —
+        спека это прямо запрещает. Побочная выгода: посты в демо-прогоне
+        отличаются друг от друга, и видно, какой пост про что.
+        """
+        draft = StubLLM().complete(
+            "система", "Тема: Как выбрать шины на зиму\nОбъём: 900-1400", schema=PostDraft
+        )
+
+        assert draft.title == "Как выбрать шины на зиму"
+        assert "Как выбрать шины на зиму" in draft.body
+
+    def test_different_topics_give_different_posts(self):
         titles = {
-            StubLLM().complete("система", f"тема {i}", schema=PostDraft).title for i in range(20)
+            StubLLM().complete("система", f"Тема: тема номер {i}", schema=PostDraft).title
+            for i in range(20)
         }
-        assert len(titles) > 1, "заглушка выдаёт один и тот же текст на любой запрос"
+        assert len(titles) == 20, "заглушка выдаёт один и тот же текст на разные темы"
+
+    def test_long_topic_is_trimmed_to_fit_the_cover(self):
+        draft = StubLLM().complete("система", f"Тема: {'о' * 200}", schema=PostDraft)
+
+        assert len(draft.title) <= 60
+
+    def test_request_without_a_topic_does_not_crash(self):
+        assert StubLLM().complete("система", "напиши что-нибудь", schema=PostDraft).title
+
+    def test_no_niche_specific_content_is_baked_in(self):
+        """В providers/ не должно быть ничего про конкретную тематику сообщества."""
+        from pathlib import Path
+
+        source = Path(StubLLM.__module__.replace(".", "/") + ".py")
+        text = (Path(__file__).resolve().parent.parent / source).read_text(encoding="utf-8")
+
+        for marker in ["шин", "машин", "светофор", "бензин", "двигател", "автомоб"]:
+            assert marker not in text.lower(), f"в заглушке зашита тематика: «{marker}»"
 
     def test_plain_text_without_a_schema(self):
         assert isinstance(StubLLM().complete("система", "привет"), str)
