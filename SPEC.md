@@ -1,0 +1,699 @@
+# SPEC: Контент-фабрика для автопостинга в VK
+
+## Что строим
+
+Автономная система, которая генерирует и публикует посты в сообщества VK.
+Один пост = обложка с крупным заголовком + 2-3 доп. картинки + текст.
+Персонаж (одна и та же девушка-модель на всех картинках) обеспечивается LoRA.
+
+Система мультипроектная: одна кодовая база обслуживает несколько групп разных
+тематик. Тематика задаётся конфигом, а не кодом. В коде НЕ ДОЛЖНО быть ничего,
+специфичного для конкретной ниши.
+
+Участие человека в ежедневном цикле: одна кнопка в Telegram («Опубликовать»).
+
+## Среда
+
+Приложение должно одинаково работать на слабом ARM-одноплатнике и на обычном
+x86-сервере. Первичная площадка развёртывания — Raspberry Pi 3B (arm64, 1 GB
+RAM, данные на USB-SSD), но НИЧЕГО специфичного для этого железа в коде быть
+не должно.
+
+- Python 3.11+
+- Всё тяжёлое (LLM, генерация изображений) — через внешние HTTP API
+- Локально выполняется только оркестрация и сборка обложки (Pillow)
+- Запуск: Docker (основной способ) либо systemd напрямую (запасной)
+
+### Никаких хардкодов путей и лимитов
+
+Все пути и ресурсные лимиты — из переменных окружения, со значениями по
+умолчанию:
+
+| Переменная        | По умолчанию         | Назначение                       |
+|-------------------|----------------------|----------------------------------|
+| `FACTORY_DATA_DIR`| `/data`              | БД, `.env`, бэкапы               |
+| `FACTORY_TMP_DIR` | `/tmp/factory`       | временные картинки               |
+| `FACTORY_PROJECTS_DIR` | `/app/projects` | конфиги проектов                 |
+| `FACTORY_MAX_PARALLEL_IMAGES` | `1`      | параллельных генераций картинок  |
+| `FACTORY_TICK_INTERVAL_SEC`   | `600`    | период тика                      |
+| `HTTP_PROXY` / `HTTPS_PROXY`  | пусто    | общий прокси                     |
+
+`FACTORY_MAX_PARALLEL_IMAGES=1` на Pi, `4` на нормальном сервере. Код должен
+корректно работать при любом значении.
+
+### Прокси — обязательно
+
+Провайдеры должны поддерживать проксирование, причём раздельно. Реальность:
+с российского IP плохо ходить в OpenAI/Replicate, с зарубежного — в VK.
+Один глобальный прокси эту задачу не решает.
+
+Каждому провайдеру — свой опциональный прокси через env, с фолбэком на
+глобальный `HTTPS_PROXY`:
+
+```yaml
+llm:
+  proxy_env: LLM_PROXY          # опционально
+image:
+  proxy_env: IMAGE_PROXY        # опционально
+vk:
+  proxy_env: VK_PROXY           # опционально
+```
+
+Все `httpx`-клиенты создаются через единую фабрику `core/http.py`, которая
+принимает имя провайдера и собирает клиент с нужным прокси, таймаутами
+(connect 10s, read 120s) и общими заголовками. Прямых вызовов `httpx.get`
+в коде быть не должно.
+
+### Профиль ресурсов
+
+Держать пиковое потребление одного воркера ниже ~400 MB, чтобы влезать в
+слабое железо. Это достигается естественно: не держать несколько картинок в
+памяти одновременно, писать байты на диск сразу после получения, обрабатывать
+изображения по одному.
+
+## Стек
+
+- Python 3.11, стандартная библиотека + минимум зависимостей
+- SQLite (WAL mode), файл `/data/factory.db`
+- `httpx` для HTTP
+- `pydantic` для валидации конфигов и структурированных ответов LLM
+- `PyYAML` для конфигов
+- `Pillow` для сборки обложки
+- `aiogram` v3 для Telegram-бота
+- `pytest` для тестов
+- Управление зависимостями: `uv`
+- Упаковка: Docker + docker compose
+- Планировщик: внутренний цикл воркера (`sleep FACTORY_TICK_INTERVAL_SEC`),
+  чтобы не зависеть от cron/systemd внутри контейнера
+
+Не использовать: Django, Celery, Redis, Postgres, ORM-тяжеловесы.
+
+SQLite выбран осознанно, не из-за слабого железа: один писатель, десятки
+записей в сутки. Постгрес добавил бы контейнер, сложность бэкапов и нулевую
+выгоду. Файл БД копируется как файл — в этом весь смысл лёгкой миграции.
+
+---
+
+## Архитектура
+
+### Главный принцип
+
+Пост — это конечный автомат. Каждый шаг идемпотентен и возобновляем.
+НЕ пиши линейный скрипт «сгенерил → запостил».
+
+Воркер запускается по таймеру раз в 10 минут, берёт все посты в
+нетерминальных состояниях и продвигает каждый ровно на один шаг вперёд.
+Если процесс убить в любой момент — при следующем тике работа продолжается
+с того места, где остановилась. Уже сгенерированные (оплаченные) картинки
+не должны генерироваться повторно.
+
+### Состояния поста
+
+```
+queued
+  → text_ready
+  → factchecked
+  → prompts_ready
+  → images_ready
+  → composed
+  → in_review
+  → approved
+  → published        (терминальное)
+
+  → failed           (терминальное, после исчерпания retry)
+  → rejected         (терминальное, человек нажал «В мусор»)
+```
+
+Переход выполняется соответствующим модулем в `core/steps/`.
+Имя шага = имя целевого состояния.
+
+Правила:
+- один тик = один переход на пост (не гнать пост по всей цепочке за раз)
+- перед выполнением шага проверять, не выполнен ли он уже (идемпотентность)
+- при ошибке: `retry_count += 1`, `last_error = <текст>`, состояние не меняется
+- при `retry_count >= 5` → состояние `failed` + уведомление в Telegram
+- backoff между попытками: 10 мин × 2^retry_count, максимум 6 часов
+
+### Схема БД
+
+```sql
+CREATE TABLE projects (
+    id            INTEGER PRIMARY KEY,
+    slug          TEXT UNIQUE NOT NULL,
+    config_path   TEXT NOT NULL,
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE topics (
+    id            INTEGER PRIMARY KEY,
+    project_id    INTEGER NOT NULL REFERENCES projects(id),
+    title         TEXT NOT NULL,
+    angle         TEXT,
+    status        TEXT NOT NULL DEFAULT 'free',  -- free | taken | used
+    used_at       TEXT
+);
+CREATE INDEX idx_topics_free ON topics(project_id, status) WHERE status = 'free';
+
+CREATE TABLE posts (
+    id            INTEGER PRIMARY KEY,
+    project_id    INTEGER NOT NULL REFERENCES projects(id),
+    topic_id      INTEGER NOT NULL REFERENCES topics(id),
+    idem_key      TEXT UNIQUE NOT NULL,        -- f"{project_slug}:{topic_id}"
+    state         TEXT NOT NULL DEFAULT 'queued',
+    title         TEXT,                         -- заголовок для обложки
+    body          TEXT,                         -- текст поста
+    question      TEXT,                         -- вопрос-хук в конце
+    retry_count   INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    next_attempt_at TEXT,
+    scheduled_at  TEXT,
+    external_id   TEXT,                         -- vk post id после публикации
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX idx_posts_active ON posts(state, next_attempt_at);
+
+CREATE TABLE assets (
+    id            INTEGER PRIMARY KEY,
+    post_id       INTEGER NOT NULL REFERENCES posts(id),
+    kind          TEXT NOT NULL,                -- cover | inline
+    position      INTEGER NOT NULL,
+    prompt        TEXT,
+    seed          INTEGER,
+    local_path    TEXT,
+    external_ref  TEXT,                         -- vk attachment string
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE comments (
+    id            INTEGER PRIMARY KEY,
+    post_id       INTEGER NOT NULL REFERENCES posts(id),
+    external_id   TEXT UNIQUE NOT NULL,
+    author        TEXT,
+    text          TEXT,
+    replied_at    TEXT
+);
+
+CREATE TABLE runs (
+    id            INTEGER PRIMARY KEY,
+    post_id       INTEGER REFERENCES posts(id),
+    step          TEXT NOT NULL,
+    ok            INTEGER NOT NULL,
+    duration_ms   INTEGER,
+    cost_usd      REAL,
+    error         TEXT,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE rejections (
+    id            INTEGER PRIMARY KEY,
+    post_id       INTEGER NOT NULL REFERENCES posts(id),
+    reason        TEXT NOT NULL,                -- text | images | trash
+    snapshot      TEXT,                         -- json: текст и промпты на момент отказа
+    created_at    TEXT NOT NULL
+);
+```
+
+`idem_key` — критично. Перед публикацией обязательна проверка, что
+`external_id IS NULL`. Дубль поста в группе недопустим.
+
+Миграции: простые пронумерованные `.sql` файлы в `migrations/`, применяются
+при старте, версия в `PRAGMA user_version`.
+
+### Интерфейсы провайдеров
+
+Ровно три протокола. Все внешние вызовы идут только через них.
+
+```python
+class LLMProvider(Protocol):
+    def complete(
+        self, system: str, user: str, *, schema: type[BaseModel] | None = None
+    ) -> str | BaseModel: ...
+
+class ImageProvider(Protocol):
+    def generate(
+        self, prompt: str, *, lora: str | None, seed: int | None,
+        width: int, height: int
+    ) -> bytes: ...
+
+class Publisher(Protocol):
+    def publish(self, post: Post, assets: list[Asset]) -> str: ...
+    def fetch_comments(self, external_id: str) -> list[Comment]: ...
+    def reply(self, external_comment_id: str, text: str) -> None: ...
+```
+
+Реализации:
+- `providers/llm/openai_compatible.py` — работает с любым OpenAI-совместимым
+  API. **base_url обязательно конфигурируемый** (пользователь может ходить
+  через реселлера/прокси). Ключ из env.
+- `providers/llm/anthropic.py` — то же, base_url конфигурируемый.
+- `providers/images/replicate.py`
+- `providers/images/stub.py` — генерирует картинку-заглушку локально Pillow
+  (цветной прямоугольник с текстом промпта). Нужен для разработки без затрат.
+- `providers/publishers/vk.py`
+- `providers/publishers/stub.py` — пишет в лог и в файл, возвращает фейковый id.
+
+Выбор реализации — по строке из конфига проекта.
+
+### Ретраи и учёт
+
+Один общий декоратор `@tracked_call(step_name)` в `core/retry.py`:
+- экспоненциальный backoff внутри одной попытки (3 захода на сетевые ошибки)
+- корректная обработка HTTP 429 с уважением `Retry-After`
+- запись строки в `runs` с длительностью и стоимостью
+- НЕ размазывай try/except по бизнес-логике
+
+---
+
+## Шаги пайплайна
+
+### `text_ready`
+Берёт свободную тему (`topics.status = 'free'`, атомарно переводит в `taken`).
+Вызывает LLM с системным промптом из `persona.voice_file` и few-shot
+примерами из `persona.style_examples/` (все `.md` файлы оттуда).
+
+Структура поста задаётся `content.post_structure` из конфига.
+Ответ через `schema=` (pydantic): `title`, `body`, `question`.
+
+`title` — короткий, для обложки, максимум 60 символов, БЕЗ точки в конце.
+
+### `factchecked`
+Отдельный вызов LLM с включённым веб-поиском (если провайдер поддерживает):
+проверить даты, названия, числа в `body`.
+Ответ по схеме: `verdict` (ok | fixed | uncertain), `corrected_body`, `notes`.
+
+- `ok` → идём дальше
+- `fixed` → заменяем `body`, идём дальше
+- `uncertain` → пост помечается флагом и в ревью показывается с
+  предупреждением «⚠️ фактчек не уверен: {notes}»
+
+Если `content.factcheck: off` — шаг пропускается.
+
+### `prompts_ready`
+LLM читает готовый `body` и генерит промпты сцен:
+- 1 промпт для обложки (персонаж крупно, выразительная поза)
+- N промптов для inline-картинок (N из конфига, обычно 2-3)
+
+Промпты на английском. К каждому автоматически дописывается
+`image.scene_style` из конфига. Ответ по схеме, сохраняется в `assets`.
+
+### `images_ready`
+Для каждой записи в `assets` без `local_path` — вызвать `ImageProvider`.
+Уже сгенерированные пропускать (идемпотентность!).
+
+Генерация идёт через пул размером `FACTORY_MAX_PARALLEL_IMAGES`
+(`concurrent.futures.ThreadPoolExecutor`). При значении `1` — обычная
+последовательная обработка. Байты писать на диск сразу, не накапливать в
+памяти.
+
+Файлы писать в `{FACTORY_TMP_DIR}/{post_id}/`. Размер 1080×1350 для всех.
+
+### `composed`
+Локальная сборка обложки на Pillow по шаблону `image.cover_template`:
+- красная рамка по периметру
+- белая плашка сверху
+- заголовок из `posts.title`, кириллица, автоперенос по словам,
+  автоподбор размера шрифта под высоту плашки
+- шрифт — bold sans, файл лежит в `assets/fonts/`
+
+**Текст на картинке рисуется ТОЛЬКО локально.** Никогда не просить
+нейросеть отрисовать русский текст.
+
+Шаблон обложки — JSON: координаты плашки, толщина и цвет рамки, отступы,
+диапазон размеров шрифта, цвета.
+
+### `in_review`
+Telegram-бот отправляет владельцу:
+- медиагруппу (обложка первой)
+- текст поста целиком отдельным сообщением
+- предупреждение фактчека, если было
+- инлайн-клавиатуру:
+
+```
+[✅ Опубликовать]        [🔄 Картинки заново]
+[🎲 Другие сцены]        [✏️ Текст заново]
+[🗑 В мусор]
+```
+
+Поведение кнопок:
+- **Картинки заново** — тот же промпт, новый seed → откат в `prompts_ready`
+  с сохранением промптов, очистка `local_path`
+- **Другие сцены** — новые промпты → откат в `factchecked`
+- **Текст заново** — полностью с нуля → откат в `queued`, тема остаётся `taken`
+- **В мусор** → `rejected`, тема возвращается в `free`
+
+Каждое отклонение пишется в `rejections` со снапшотом. Это будущий датасет.
+
+Если `review.mode: auto` ИЛИ подряд одобрено `review.auto_after_n_approved`
+постов без единой правки — шаг пропускается, пост сразу в `approved`.
+
+### `approved` → `published`
+Проверить `external_id IS NULL`. Проверить, что текущее время подходит под
+`vk.schedule` (или использовать `publish_date` для отложки).
+
+Последовательность VK API:
+1. `photos.getWallUploadServer` (group_id)
+2. multipart POST на полученный upload_url
+3. `photos.saveWallPhoto` → получить `owner_id` и `id`
+4. собрать строку вложений `photo{owner_id}_{id},...`
+5. `wall.post` с `owner_id = -group_id`, `from_group = 1`, `message`,
+   `attachments`, опционально `publish_date`
+
+Версия API — из конфига, по умолчанию `5.199`.
+Токен — из env, никогда не в конфиге и не в логах.
+
+После успеха: `external_id`, состояние `published`, тема → `used`,
+файлы из `/dev/shm` удалить.
+
+---
+
+## Отдельный воркер: комментарии
+
+`workers/comments.py`, свой systemd timer, раз в 20 минут.
+
+Для постов, опубликованных 40-180 минут назад:
+- забрать комментарии
+- взять до 5 неотвеченных
+- сгенерить ответы одним вызовом LLM (тот же `voice.md` + инструкция:
+  коротко, 1-2 предложения, в характере, без технических утверждений)
+- опубликовать ответы, отметить `replied_at`
+
+Не отвечать: на собственные комментарии группы, на комменты с
+оскорблениями (простой стоп-лист), на комменты короче 3 символов.
+
+---
+
+## Конфигурация
+
+`projects/<slug>/config.yaml`:
+
+```yaml
+slug: auto_girl
+vk:
+  group_id: 123456789
+  token_env: VK_TOKEN_AUTO
+  api_version: "5.199"
+  schedule: ["19:30", "21:00"]
+  timezone: "Europe/Moscow"
+
+persona:
+  name: "Кристина"
+  voice_file: prompts/voice.md
+  style_examples: prompts/examples/
+
+llm:
+  provider: openai_compatible
+  base_url_env: LLM_BASE_URL
+  api_key_env: LLM_API_KEY
+  model: "gpt-4o"
+  factcheck_model: "gpt-4o"
+
+image:
+  provider: replicate
+  api_key_env: REPLICATE_TOKEN
+  model: "user/flux-lora-kristina"
+  lora: "kristina_v1"
+  inline_count: 3
+  cover_template: templates/red_frame.json
+  scene_style: "cinematic photo, overcast light, 35mm, shallow depth of field"
+
+content:
+  post_structure: [hook, story, detail, question]
+  target_length: [900, 1400]
+  factcheck: strict          # strict | light | off
+
+review:
+  mode: telegram             # telegram | auto
+  auto_after_n_approved: 40
+
+limits:
+  posts_per_day: 2
+  max_cost_per_post_usd: 0.40
+```
+
+Глобальные секреты — в `/data/.env`, права `600`. Валидация конфига через
+pydantic при старте, с понятными сообщениями об ошибках.
+
+---
+
+## Структура репозитория
+
+```
+factory/
+  core/
+    db.py
+    models.py
+    machine.py           # тик стейт-машины
+    retry.py
+    config.py
+    http.py              # фабрика httpx-клиентов с прокси
+    paths.py             # все пути из env, ни одного хардкода
+    steps/
+      __init__.py        # реестр: state -> handler
+      text.py
+      factcheck.py
+      prompts.py
+      images.py
+      compose.py
+      review.py
+      publish.py
+  providers/
+    llm/
+    images/
+    publishers/
+  compose/
+    cover.py
+    fonts/
+  bot/
+    review_bot.py
+  workers/
+    tick.py              # entrypoint основного воркера
+    comments.py
+  cli.py                 # управление
+migrations/
+projects/
+  auto_girl/
+    config.yaml
+    prompts/
+      voice.md
+      examples/
+    templates/
+      red_frame.json
+deploy/
+  Dockerfile
+  docker-compose.yml
+  docker-compose.dev.yml
+  systemd/                 # запасной вариант без Docker
+    factory-tick.service
+    factory-comments.service
+    factory-bot.service
+.github/
+  workflows/
+    build.yml              # multi-arch сборка в ghcr.io
+tests/
+README.md
+```
+
+## CLI
+
+```
+factory init                       # создать БД, применить миграции
+factory project add <slug>
+factory topics import <slug> <file.txt>
+factory topics gen <slug> --count 150      # LLM генерит темы в файл на ревью
+factory run --once                         # один тик, для отладки
+factory run --loop                         # бесконечный цикл (режим контейнера)
+factory comments --loop
+factory bot                                # телеграм-бот
+factory post create <slug>                 # создать пост вручную
+factory post show <id>
+factory post retry <id>                    # сбросить retry_count
+factory stats <slug> --days 30             # посты, стоимость, отказы
+factory doctor                             # проверить env, БД, доступность API
+```
+
+---
+
+## Порядок реализации
+
+Строго по этапам. После каждого — рабочее состояние и тесты.
+
+**Этап 1. Скелет.**
+БД, миграции, конфиг, стейт-машина, все шаги как заглушки (`sleep` + смена
+состояния). Тест: убить процесс `kill -9` посреди прогона, убедиться что
+следующий тик продолжает корректно. Тест: два одновременных тика не создают
+дубль.
+
+**Этап 2. Публикация.**
+Реальный VK publisher + `compose/cover.py`. Провайдеры LLM и картинок — stub.
+Результат: система постит в тестовую закрытую группу заглушку с реальной
+обложкой. Здесь вылезут все сюрпризы VK API.
+
+**Этап 3. Текст.**
+Реальный LLM-провайдер, шаги `text` и `factcheck`.
+
+**Этап 4. Картинки.**
+Реальный image-провайдер, без LoRA (любая модель, фиксированный seed).
+
+**Этап 5. Telegram-ревью.**
+Бот, все кнопки, откаты состояний, запись в `rejections`.
+
+**Этап 6. Комментарии.**
+Отдельный воркер.
+
+**Этап 7. Упаковка и деплой.**
+Dockerfile, compose, CI-сборка, хартбит, бэкапы.
+
+---
+
+## Docker
+
+Три сервиса в `docker-compose.yml`, общий образ, разные команды:
+
+| Сервис      | Команда                    | Режим              |
+|-------------|----------------------------|--------------------|
+| `tick`      | `factory run --loop`       | цикл с интервалом  |
+| `comments`  | `factory comments --loop`  | цикл, 20 мин       |
+| `bot`       | `factory bot`              | долгоживущий       |
+
+Общее для всех:
+- `restart: unless-stopped`
+- один volume: `${FACTORY_DATA_DIR}:/data`
+- `env_file: /data/.env`
+- healthcheck для `tick`: проверка свежести хартбита в БД
+- `mem_limit: 400m` — чтобы расхождение с Pi всплывало на разработке, а не в бою
+
+Образ:
+- база `python:3.11-slim-bookworm`
+- multi-stage: сборка зависимостей через `uv`, в финальный слой только venv
+- non-root пользователь
+- шрифты и шаблоны копируются в образ, конфиги проектов — тоже
+  (пересборка при смене ниши — это нормально)
+
+`docker-compose.dev.yml` — оверрайд для локальной разработки: монтирует
+исходники внутрь, ставит stub-провайдеры, `FACTORY_MAX_PARALLEL_IMAGES=4`.
+
+### CI
+
+`.github/workflows/build.yml`: на пуш в `main` собирает multi-arch образ
+(`linux/amd64`, `linux/arm64`) через `docker buildx` и пушит в `ghcr.io` с
+тегами `latest` и `sha-<short>`.
+
+**Образ НЕ собирается на целевом устройстве.** На слабом ARM это занимает
+десятки минут. Деплой = `docker compose pull && docker compose up -d`.
+
+### Миграция на другой сервер
+
+Должна сводиться ровно к трём шагам, и это надо задокументировать в README:
+1. скопировать директорию `/data`
+2. скопировать `docker-compose.yml` и `.env`
+3. `docker compose up -d`
+
+Никакого состояния вне `/data` быть не должно.
+
+---
+
+## Эксплуатация
+
+- Защита от наложения запусков: флаг-строка в БД с TTL 30 минут
+- Логи структурированные (JSON) в stdout, забираются драйвером Docker,
+  секреты не логировать никогда
+- Ротация: `json-file` с `max-size: 10m`, `max-file: 3`
+- Хартбит: если основной тик не отработал успешно 2 часа — бот пишет владельцу
+- Ежедневная сводка в Telegram в 23:00: опубликовано, ошибок, потрачено $
+- Бэкап: `VACUUM INTO /data/backups/factory-{date}.db` раз в сутки, хранить 7
+- Если стоимость поста превысила `limits.max_cost_per_post_usd` — пост в
+  `failed` с уведомлением, не жечь деньги молча
+
+## Документация
+
+Владелец проекта не пишет и не читает код. Он должен уметь запускать,
+останавливать, чинить и расширять систему по документации, не открывая
+исходники. Документация — часть каждого этапа, а не отдельная задача в конце.
+
+Писать по-русски. Каждая команда — готовая к копипасту, с реальными путями,
+без плейсхолдеров вида `<your_path>`.
+
+### `README.md`
+Что это, как поставить с нуля, какие ключи нужны и где их взять
+(пошагово: токен сообщества VK, бот у @BotFather, ключи LLM и картинок).
+Первый запуск до первого опубликованного поста.
+
+### `RUNBOOK.md` — главный документ
+
+Сборник рецептов «хочу сделать X → выполни это». Обязательный минимум:
+
+**Ежедневное**
+- запустить всё / остановить всё / перезапустить один сервис
+- посмотреть, что происходит прямо сейчас
+- посмотреть логи (все, за последний час, только ошибки)
+- поставить систему на паузу, не удаляя ничего
+
+**Контент**
+- добавить темы в очередь
+- посмотреть, сколько тем осталось
+- отменить уже одобренный, но ещё не опубликованный пост
+- поменять расписание публикаций
+- поменять стиль текста (какой файл править и что будет дальше)
+
+**Новая группа**
+- полный чеклист добавления новой ниши: что создать, что заполнить,
+  что перезапустить. Ожидаемое время — полчаса
+
+**Когда сломалось**
+- посты застряли и не двигаются
+- бот не отвечает в Telegram
+- ВК вернул ошибку публикации
+- закончились деньги на API
+- как перезапустить один конкретный пост
+- как посмотреть, на что уходят деньги
+
+**Обслуживание**
+- обновиться до новой версии
+- откатиться на предыдущую версию
+- сделать бэкап руками
+- восстановиться из бэкапа
+- перенести всё на другой сервер
+
+### `TROUBLESHOOTING.md`
+Таблица: симптом → вероятная причина → команда для проверки → как чинить.
+Пополняется по мере появления реальных ошибок.
+
+### `CLAUDE.md`
+Для будущих сессий Claude Code: архитектура в двух абзацах, где что лежит,
+конвенции проекта, как добавить новый шаг пайплайна, как добавить нового
+провайдера, как гонять тесты.
+
+### Требования к тексту ошибок
+
+Раз владелец не читает код, сообщения об ошибках — тоже документация.
+Каждое должно содержать: что сломалось, почему и что делать.
+
+Плохо: `KeyError: 'vk_token'`
+Хорошо: `Не найден токен VK для проекта auto_girl. Ожидается переменная
+VK_TOKEN_AUTO в /data/.env. См. RUNBOOK.md → «Ключи и токены».`
+
+Проверка при приёмке этапа: человек, не открывая исходники, выполняет
+рецепты из RUNBOOK и получает ожидаемый результат.
+
+## Тесты
+
+- юнит-тесты на каждый переход стейт-машины
+- тест идемпотентности: повторный вызов шага не создаёт дублей и не тратит API
+- тест возобновляемости после краша
+- тест на отсутствие дубля публикации
+- тест `compose/cover.py`: длинный кириллический заголовок помещается в плашку
+- все внешние вызовы в тестах замоканы, реальная сеть не дёргается
+
+## Чего не делать
+
+- не изобретать веб-интерфейс, управление только через Telegram и CLI
+- не тащить асинхронность в основной воркер (только в боте, где aiogram)
+- не хардкодить ничего про конкретную тематику в `core/` и `providers/`
+- не логировать токены, ключи и полные тела ответов API
+- не просить нейросеть рисовать русский текст на картинке
+- не хардкодить пути — всё через `core/paths.py` и env
+- не создавать `httpx`-клиенты напрямую, только через `core/http.py`
+- не собирать Docker-образ на целевом устройстве
+- не хранить состояние вне `FACTORY_DATA_DIR`
