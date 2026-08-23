@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/retry.py",
+  "tests": "tests/test_retry.py",
+  "mutations": {
+    "игнорировать заголовок Retry-After": [
+      "                        if requested is not None:\n                            delay = requested",
+      "                        if requested is not None:\n                            pass"
+    ],
+    "убрать потолок паузы из Retry-After": [
+      "    return min(seconds, MAX_RETRY_AFTER_SEC)",
+      "    return seconds"
+    ],
+    "повторять любые ошибки, включая ошибки в коде": [
+      "def _is_retryable(exc: BaseException) -> bool:",
+      "def _is_retryable(exc: BaseException) -> bool:\n    return True"
+    ],
+    "считать 4xx временными ошибками": [
+      "RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})",
+      "RETRYABLE_STATUS = frozenset({400, 401, 403, 404, 408, 422, 425, 429, 500, 502, 503, 504})"
+    ],
+    "писать строку в runs на каждую попытку, а не один раз": [
+      "                    if not _is_retryable(exc) or attempt == MAX_ATTEMPTS:\n                        break",
+      "                    if connection is not None:\n                        record_run(connection, step=step, ok=False, duration_ms=0, post_id=target_post, error=str(exc))\n                    if not _is_retryable(exc) or attempt == MAX_ATTEMPTS:\n                        break"
+    ],
+    "изменить число попыток": [
+      "MAX_ATTEMPTS = 3",
+      "MAX_ATTEMPTS = 5"
+    ],
+    "не записывать стоимость вызова": [
+      "                        cost_usd=_cost_of(result),",
+      "                        cost_usd=None,"
+    ],
+    "не наращивать паузу между попытками": [
+      "                    delay = BACKOFF_BASE_SEC ** (attempt - 1)",
+      "                    delay = 1.0"
+    ],
+    "глотать исключение вместо проброса наверх": [
+      "            assert last_exc is not None\n            raise last_exc",
+      "            assert last_exc is not None\n            return None"
+    ]
+  }
+}

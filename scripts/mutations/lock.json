@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/lock.py",
+  "tests": "tests/test_lock.py",
+  "mutations": {
+    "убрать проверку владельца при снятии блокировки": [
+      "        if _is_ours(payload):\n            conn.execute(\"DELETE FROM meta WHERE key = ?\", (LOCK_KEY,))",
+      "        conn.execute(\"DELETE FROM meta WHERE key = ?\", (LOCK_KEY,))\n        if False:\n            pass"
+    ],
+    "изменить порог протухания хартбита": [
+      "HEARTBEAT_STALE_AFTER_SEC = 2 * 3600",
+      "HEARTBEAT_STALE_AFTER_SEC = 600"
+    ],
+    "вернуть гонку: не проверять владельца при продлении": [
+      "        if not _is_ours(payload):",
+      "        if False and not _is_ours(payload):"
+    ],
+    "игнорировать TTL из окружения при захвате": [
+      "    expires_at = now_utc() + timedelta(seconds=paths.lock_ttl_sec())",
+      "    expires_at = now_utc() + timedelta(seconds=1800)"
+    ],
+    "перехватывать живую блокировку": [
+      "        if row is not None and not _is_expired(payload):\n            return False",
+      "        if False:\n            return False"
+    ],
+    "не перехватывать протухшую блокировку": [
+      "        if row is not None and not _is_expired(payload):\n            return False",
+      "        if row is not None:\n            return False"
+    ],
+    "падать на повреждённой записи вместо перехвата": [
+      "    except (json.JSONDecodeError, TypeError):",
+      "    except json.JSONDecodeError if False else ():"
+    ],
+    "считать хартбит по updated_at вместо самого значения": [
+      "    row = conn.execute(\"SELECT value FROM meta WHERE key = ?\", (HEARTBEAT_KEY,)).fetchone()",
+      "    row = conn.execute(\"SELECT updated_at AS value FROM meta WHERE key = ?\", (HEARTBEAT_KEY,)).fetchone()"
+    ],
+    "считать отсутствие хартбита нормой": [
+      "    return age is None or age > HEARTBEAT_STALE_AFTER_SEC",
+      "    return age is not None and age > HEARTBEAT_STALE_AFTER_SEC"
+    ]
+  }
+}
