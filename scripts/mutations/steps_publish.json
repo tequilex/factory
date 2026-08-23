@@ -23,12 +23,12 @@
       "    if False:"
     ],
     "не проверять расписание": [
-      "    elif open_slot(ctx.project, now_utc()) is None:",
-      "    elif False:"
+      "        if slot is None:\n            return waiting(f\"вне расписания публикаций {ctx.project.vk.schedule}\")",
+      "        if False:\n            return waiting(f\"вне расписания публикаций {ctx.project.vk.schedule}\")"
     ],
     "игнорировать FACTORY_IGNORE_SCHEDULE": [
-      "    if paths.ignore_schedule():\n        pass",
-      "    if False:\n        pass"
+      "    if not paths.ignore_schedule():",
+      "    if True:"
     ],
     "не помечать тему использованной": [
       "            ctx.conn.execute(\n                \"UPDATE topics SET status = ?, used_at = ? WHERE id = ?\",\n                (TopicStatus.USED, stamp, ctx.post.topic_id),\n            )",
@@ -45,6 +45,30 @@
     "конвертировать published_at строки в UTC вместо пояса проекта": [
       "    return sum(1 for row in rows if from_iso(row[\"published_at\"]).astimezone(project.vk.tz).date() == today)",
       "    return sum(1 for row in rows if from_iso(row[\"published_at\"]).date() == today)"
+    ],
+    "вернуть ретраи на необратимом шаге публикации": [
+      "@tracked_call(State.APPROVED, attempts=1)",
+      "@tracked_call(State.APPROVED)"
+    ],
+    "не проверять, занят ли слот": [
+      "        if slot_already_used(ctx.conn, ctx.project, project_id, moment, slot):",
+      "        if False:"
+    ],
+    "считать слот занятым публикацией из любого дня": [
+      "        start <= from_iso(row[\"published_at\"]).astimezone(project.vk.tz) < end for row in rows",
+      "        from_iso(row[\"published_at\"]).astimezone(project.vk.tz).time() >= start.time() for row in rows"
+    ],
+    "не удалять временные файлы после публикации": [
+      "    _cleanup_files(ctx.post.id, ctx.log)",
+      "    pass"
+    ],
+    "уронить публикацию из-за неудалённого файла": [
+      "    except OSError as exc:\n        log.warning(",
+      "    except ZeroDivisionError as exc:\n        log.warning("
+    ],
+    "поставить обложку последней во вложениях": [
+      "        \"SELECT * FROM assets WHERE post_id = ? ORDER BY position\", (post_id,)",
+      "        \"SELECT * FROM assets WHERE post_id = ? ORDER BY kind DESC, position\", (post_id,)"
     ]
   }
 }

@@ -114,6 +114,7 @@ def tracked_call(
     *,
     conn: sqlite3.Connection | None = None,
     post_id: int | None = None,
+    attempts: int = MAX_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Wrap a callable with retries and one ``runs`` row.
@@ -121,6 +122,11 @@ def tracked_call(
     ``conn`` and ``post_id`` may be omitted when the wrapped function receives a
     step context — they are then read off its first argument, which is how the
     pipeline steps use this.
+
+    ``attempts=1`` disables retrying, and irreversible work must use it. A
+    publishing call that times out has very likely already succeeded on the far
+    side; retrying it posts the same thing to the group a second time. Only
+    operations that can be safely repeated get the default.
 
     ``sleep`` is injectable so tests do not actually wait.
     """
@@ -134,12 +140,12 @@ def tracked_call(
             started = time.monotonic()
             last_exc: BaseException | None = None
 
-            for attempt in range(1, MAX_ATTEMPTS + 1):
+            for attempt in range(1, attempts + 1):
                 try:
                     result = func(*args, **kwargs)
                 except Exception as exc:  # noqa: BLE001 — re-raised below
                     last_exc = exc
-                    if not _is_retryable(exc) or attempt == MAX_ATTEMPTS:
+                    if not _is_retryable(exc) or attempt == attempts:
                         break
 
                     delay = BACKOFF_BASE_SEC ** (attempt - 1)
@@ -153,7 +159,7 @@ def tracked_call(
                         extra={
                             "step": step,
                             "attempt": attempt,
-                            "of": MAX_ATTEMPTS,
+                            "of": attempts,
                             "delay_sec": delay,
                             "reason": type(exc).__name__,
                         },

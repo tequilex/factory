@@ -1,21 +1,32 @@
 """approved -> published: the only step that cannot be undone.
 
-Three gates before anything leaves the building:
+Gates before anything leaves the building:
 
-* ``external_id IS NULL`` — the post has not been published already. This is the
-  duplicate guard, and it is checked inside the same transaction that records the
-  result, so a crash between "posted" and "recorded" cannot produce a second copy
-  on the next tick;
+* ``external_id IS NULL`` — the post has not been published already;
 * the daily limit, counted on ``published_at`` — never on ``updated_at``, which
   changes on any edit;
-* the publishing schedule.
+* the schedule: the current time is inside a slot, and that slot has not been
+  used yet. Without the second half both of the day's posts go out in the same
+  hour and the later slot stays empty.
 
-The last two return ``WAITING``: there is nothing wrong with the post, it is
-simply not its turn.
+The schedule and limit gates return ``WAITING``: nothing is wrong with the post,
+it is simply not its turn.
+
+**What is and is not guaranteed about duplicates.** The step never retries — see
+``attempts=1`` below — because a publish call that times out has most likely
+already succeeded on the far side. The ``UPDATE ... AND external_id IS NULL``
+protects the database record against a second tick. What is *not* covered is the
+window between the call returning and the row being written: a kill in there
+leaves the post live in the group with nothing recorded, and the next tick will
+publish it again. Closing that needs an idempotency token the provider honours —
+VK's ``wall.post`` takes ``guid`` — and that lands with the real publisher in
+Stage 2. Until then the tick lock is the only thing narrowing the window, and
+this comment is deliberately explicit so nobody assumes otherwise.
 """
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import datetime, time, timedelta
 
@@ -57,14 +68,64 @@ def open_slot(project: ProjectConfig, moment: datetime) -> time | None:
     return None
 
 
-def _assets(conn: sqlite3.Connection, post_id: int) -> list[Asset]:
+def slot_already_used(
+    conn: sqlite3.Connection, project: ProjectConfig, project_id: int, moment: datetime, slot: time
+) -> bool:
+    """Whether something has already gone out in this slot.
+
+    One post per slot. Without this the whole day's allowance empties into the
+    first open window: two posts ten minutes apart in the evening, nothing at the
+    later time the owner actually chose.
+    """
+    local = moment.astimezone(project.vk.tz)
+    start = local.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
+    end = start + timedelta(minutes=SLOT_WINDOW_MIN)
+
     rows = conn.execute(
-        "SELECT * FROM assets WHERE post_id = ? ORDER BY kind DESC, position", (post_id,)
+        "SELECT published_at FROM posts WHERE project_id = ? AND published_at IS NOT NULL",
+        (project_id,),
+    ).fetchall()
+    return any(
+        start <= from_iso(row["published_at"]).astimezone(project.vk.tz) < end for row in rows
+    )
+
+
+def _assets(conn: sqlite3.Connection, post_id: int) -> list[Asset]:
+    """Post attachments, cover first.
+
+    Order matters: it becomes the order of the attachment string, and VK shows the
+    first image as the main one. Sorting by ``kind`` would put ``inline`` ahead of
+    ``cover`` — alphabetically 'cover' < 'inline' — and the headline image would
+    end up last.
+    """
+    rows = conn.execute(
+        "SELECT * FROM assets WHERE post_id = ? ORDER BY position", (post_id,)
     ).fetchall()
     return [Asset.from_row(row) for row in rows]
 
 
-@tracked_call(State.APPROVED)
+def _cleanup_files(post_id: int, log) -> None:
+    """Remove the post's images once it is out.
+
+    Failures here are logged, never raised: the post is already published, and
+    refusing to record that because a file would not delete would be far worse
+    than leaving the file behind.
+    """
+    target = paths.post_tmp_dir(post_id)
+    try:
+        shutil.rmtree(target, ignore_errors=False)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning(
+            "не удалось удалить временные файлы поста",
+            extra={"post_id": post_id, "path": str(target), "reason": str(exc)},
+        )
+
+
+# attempts=1: publishing is irreversible. A timeout on the call does not mean the
+# post was not created — retrying would put a second copy in the group.
+@tracked_call(State.APPROVED, attempts=1)
 def run(ctx: StepContext) -> StepResult:
     if ctx.post.external_id:
         ctx.log.info(
@@ -81,10 +142,13 @@ def run(ctx: StepContext) -> StepResult:
     if already >= ctx.project.limits.posts_per_day:
         return waiting(f"дневной лимит исчерпан: {already} из {ctx.project.limits.posts_per_day}")
 
-    if paths.ignore_schedule():
-        pass
-    elif open_slot(ctx.project, now_utc()) is None:
-        return waiting(f"вне расписания публикаций {ctx.project.vk.schedule}")
+    if not paths.ignore_schedule():
+        moment = now_utc()
+        slot = open_slot(ctx.project, moment)
+        if slot is None:
+            return waiting(f"вне расписания публикаций {ctx.project.vk.schedule}")
+        if slot_already_used(ctx.conn, ctx.project, project_id, moment, slot):
+            return waiting(f"в слоте {slot:%H:%M} уже была публикация")
 
     assets = _assets(ctx.conn, ctx.post.id)
     external_id = ctx.providers.publisher.publish(ctx.post, assets)
@@ -109,6 +173,8 @@ def run(ctx: StepContext) -> StepResult:
                 "UPDATE topics SET status = ?, used_at = ? WHERE id = ?",
                 (TopicStatus.USED, stamp, ctx.post.topic_id),
             )
+
+    _cleanup_files(ctx.post.id, ctx.log)
 
     ctx.log.info(
         "пост опубликован",

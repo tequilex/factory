@@ -127,8 +127,16 @@ class TestText:
         assert pipeline["providers"].llm.calls == before
 
     def test_repeat_run_keeps_the_original_text(self, pipeline):
+        """Провайдер подменяется на другой текст: заглушка детерминирована, и без
+        подмены тест проходил бы даже при полностью снятой защите."""
         pipeline["run"](State.QUEUED)
         original = post_row(pipeline["conn"], pipeline["post_id"])["body"]
+
+        from factory.providers.base import PostDraft
+
+        pipeline["providers"].llm.complete = lambda system, user, *, schema=None: PostDraft(
+            title="Совсем другой заголовок", body="Совсем другой текст", question="Другой вопрос?"
+        )
 
         pipeline["run"](State.QUEUED)
 
@@ -274,6 +282,30 @@ class TestImages:
         assert pipeline["providers"].images.calls == before + 1
         assert Path(victim["local_path"]).is_file()
 
+    def test_size_is_requested_explicitly_not_left_to_the_provider(self, pipeline):
+        """1080×1350 задаёт шаг, а не умолчание провайдера.
+
+        Боевой провайдер Этапа 4 придёт со своим дефолтом, и если шаг размер не
+        просит, картинки молча поменяют пропорции — в ленте ВК это сразу видно.
+        """
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        seen: list[dict] = []
+        provider = pipeline["providers"].images
+        original = provider.generate
+
+        def capture(prompt, **kwargs):
+            seen.append(kwargs)
+            return original(prompt, **kwargs)
+
+        provider.generate = capture
+
+        pipeline["run"](State.PROMPTS_READY)
+
+        assert seen, "провайдер картинок не вызывался"
+        for call in seen:
+            assert call["width"] == 1080
+            assert call["height"] == 1350
+
     def test_seed_from_the_asset_reaches_the_provider(self, pipeline):
         """На seed держится кнопка «Картинки заново»: тот же промпт, новый seed.
 
@@ -316,15 +348,94 @@ class TestImages:
 
         assert Path(cover["local_path"]).read_bytes() != before
 
-    def test_parallel_pool_produces_the_same_files(self, pipeline, monkeypatch):
-        """FACTORY_MAX_PARALLEL_IMAGES=4 на сервере, 1 на Pi — результат одинаковый."""
+    def test_parallel_pool_really_uses_several_workers(self, pipeline, monkeypatch):
+        """FACTORY_MAX_PARALLEL_IMAGES=4 на сервере, 1 на Pi.
+
+        Проверяются именно потоки: раньше тест смотрел только на наличие файлов и
+        проходил бы при полностью выключенной параллельности.
+        """
+        import threading
+
         monkeypatch.setenv("FACTORY_MAX_PARALLEL_IMAGES", "4")
         pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+
+        threads: set[int] = set()
+        provider = pipeline["providers"].images
+        original = provider.generate
+
+        def note_thread(prompt, **kwargs):
+            threads.add(threading.get_ident())
+            return original(prompt, **kwargs)
+
+        provider.generate = note_thread
 
         result, _ = pipeline["run"](State.PROMPTS_READY)
 
         assert result.advanced
-        assert all(Path(row["local_path"]).is_file() for row in assets_of(pipeline["conn"], pipeline["post_id"]))
+        assert len(threads) > 1, "картинки сгенерированы в один поток, пул не задействован"
+        assert threading.get_ident() not in threads, "генерация шла в основном потоке"
+
+    def test_sequential_and_parallel_give_the_same_files(self, pipeline, monkeypatch):
+        """Результат не должен зависеть от числа воркеров: Pi и сервер выдают одно и то же."""
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        monkeypatch.setenv("FACTORY_MAX_PARALLEL_IMAGES", "1")
+        pipeline["run"](State.PROMPTS_READY)
+        rows = assets_of(pipeline["conn"], pipeline["post_id"])
+        sequential = {row["position"]: Path(row["local_path"]).read_bytes() for row in rows}
+
+        with db.write_transaction(pipeline["conn"]):
+            pipeline["conn"].execute(
+                "UPDATE assets SET local_path = NULL WHERE post_id = ?", (pipeline["post_id"],)
+            )
+        for row in rows:
+            Path(row["local_path"]).unlink()
+
+        monkeypatch.setenv("FACTORY_MAX_PARALLEL_IMAGES", "4")
+        pipeline["run"](State.PROMPTS_READY)
+        parallel = {
+            row["position"]: Path(row["local_path"]).read_bytes()
+            for row in assets_of(pipeline["conn"], pipeline["post_id"])
+        }
+
+        assert sequential == parallel
+
+    def test_a_failure_partway_keeps_the_images_already_paid_for(self, pipeline, monkeypatch):
+        """Сбой на четвёртой картинке не должен обнулять первые три.
+
+        Раньше пути писались одной транзакцией в конце шага, поэтому падение на
+        последней теряло оплату за все предыдущие — а ретрай внутри tracked_call
+        тут же оплачивал их заново.
+        """
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        monkeypatch.setenv("FACTORY_MAX_PARALLEL_IMAGES", "1")
+
+        provider = pipeline["providers"].images
+        original = provider.generate
+        counter = {"calls": 0, "fail_at": 4}
+
+        def counted(prompt, **kwargs):
+            counter["calls"] += 1
+            if counter["calls"] == counter["fail_at"]:
+                raise RuntimeError("провайдер отвалился на последней картинке")
+            return original(prompt, **kwargs)
+
+        provider.generate = counted
+
+        with pytest.raises(RuntimeError):
+            pipeline["run"](State.PROMPTS_READY)
+
+        saved = [row for row in assets_of(pipeline["conn"], pipeline["post_id"]) if row["local_path"]]
+        assert len(saved) == 3, "оплаченные картинки не зафиксированы в базе"
+        assert counter["calls"] == 4
+
+        counter["fail_at"] = None
+        result, _ = pipeline["run"](State.PROMPTS_READY)
+
+        assert result.advanced
+        assert counter["calls"] == 5, (
+            f"после сбоя сделано {counter['calls'] - 4} вызовов вместо одного — "
+            "уже оплаченные картинки сгенерированы заново"
+        )
 
 
 class TestCompose:

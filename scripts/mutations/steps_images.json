@@ -11,8 +11,8 @@
       "            if False:"
     ],
     "не сохранять путь к сгенерированной картинке": [
-      "            [(path, asset_id) for asset_id, path in results],",
-      "            [(None, asset_id) for asset_id, path in results],"
+      "        conn.execute(\"UPDATE assets SET local_path = ? WHERE id = ?\", (path, asset_id))",
+      "        conn.execute(\"UPDATE assets SET local_path = ? WHERE id = ?\", (None, asset_id))"
     ],
     "игнорировать seed при генерации": [
       "        seed=asset.seed,",
@@ -21,6 +21,18 @@
     "класть файлы в общий каталог вместо каталога поста": [
       "    target_dir = paths.post_tmp_dir(ctx.post.id)",
       "    target_dir = paths.tmp_dir()"
+    ],
+    "копить пути и писать их одной транзакцией в конце шага": [
+      "            asset_id, path = _generate_one(ctx, asset, target_dir)\n            _record_path(ctx.conn, asset_id, path)\n            done += 1",
+      "            asset_id, path = _generate_one(ctx, asset, target_dir)\n            done += 1\n            if done == len(pending):\n                _record_path(ctx.conn, asset_id, path)"
+    ],
+    "не передавать размер картинки явно": [
+      "        width=IMAGE_WIDTH,\n        height=IMAGE_HEIGHT,",
+      ""
+    ],
+    "генерировать всё в один поток, игнорируя пул": [
+      "    workers = max(1, min(paths.max_parallel_images(), len(pending)))",
+      "    workers = 1"
     ]
   }
 }

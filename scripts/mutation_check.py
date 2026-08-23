@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -51,11 +52,27 @@ def run_tests(tests: str | list[str]) -> tuple[bool, list[str]]:
     return result.returncode == 0, failed
 
 
+def _restore_on_signal(module: Path, original: str):
+    """Возвращает исходник, если скрипт прервали или прибили по таймауту.
+
+    Без этого прерванный прогон оставляет в рабочем дереве изменённый модуль —
+    и следующий человек (или агент) видит непонятно откуда взявшуюся правку.
+    """
+
+    def handler(signum, frame):
+        module.write_text(original, encoding="utf-8")
+        raise SystemExit(130)
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, handler)
+
+
 def main(task_path: str) -> int:
     task = json.loads(Path(task_path).read_text(encoding="utf-8"))
     module = REPO_ROOT / task["module"]
     tests = task["tests"]
     original = module.read_text(encoding="utf-8")
+    _restore_on_signal(module, original)
 
     passed_clean, _ = run_tests(tests)
     if not passed_clean:
