@@ -44,7 +44,7 @@ def run(ctx: StepContext) -> StepResult:
         f"Post text:\n{ctx.post.body}\n\n"
         f"Give one cover scene and exactly {inline_count} inline scenes."
     )
-    scenes = ctx.providers.llm.complete(SYSTEM, user, schema=ScenePrompts)
+    scenes = ctx.charge(ctx.providers.llm.complete(SYSTEM, user, schema=ScenePrompts))
 
     style = ctx.project.image.scene_style
     stamp = to_iso(now_utc())

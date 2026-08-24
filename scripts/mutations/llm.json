@@ -1,0 +1,66 @@
+{
+  "module": "factory/providers/llm/openai_compatible.py",
+  "tests": "tests/test_llm_openai.py",
+  "mutations": {
+    "не считать пустой ответ сбоем": [
+      "        if not content:",
+      "        if False:"
+    ],
+    "не обрезать пробелы — пустой ответ пройдёт как непустой": [
+      "        content = (message.get(\"content\") or \"\").strip()",
+      "        content = message.get(\"content\") or \" \""
+    ],
+    "не передавать схему в запрос": [
+      "        if schema is not None:\n            payload[\"response_format\"] = {",
+      "        if False:\n            payload[\"response_format\"] = {"
+    ],
+    "отключить строгий режим схемы": [
+      "                    \"strict\": True,",
+      "                    \"strict\": False,"
+    ],
+    "не требовать все поля в схеме": [
+      "        schema[\"required\"] = list(schema[\"properties\"])",
+      "        schema[\"required\"] = []"
+    ],
+    "разрешить лишние поля в схеме": [
+      "    schema[\"additionalProperties\"] = False",
+      "    schema[\"additionalProperties\"] = True"
+    ],
+    "игнорировать max_tokens из конфига": [
+      "            \"max_tokens\": self.max_tokens,",
+      "            \"max_tokens\": 512,"
+    ],
+    "игнорировать temperature из конфига": [
+      "            \"temperature\": self.temperature,",
+      "            \"temperature\": 1.0,"
+    ],
+    "уменьшить лимит по умолчанию до опасного": [
+      "        max_tokens: int = 4000,",
+      "        max_tokens: int = 1200,"
+    ],
+    "не искать JSON среди болтовни": [
+      "    start, end = stripped.find(\"{\"), stripped.rfind(\"}\")\n    if start != -1 and end > start:\n        return stripped[start : end + 1]",
+      "    if False:\n        pass"
+    ],
+    "не проверять ключ на кириллицу": [
+      "    if key.isascii():\n        return key",
+      "    return key\n    if key.isascii():"
+    ],
+    "не считать стоимость": [
+      "        return (\n            prompt * self.price_input_per_1m + completion * self.price_output_per_1m\n        ) / 1_000_000",
+      "        return 0.0"
+    ],
+    "считать неизвестную цену нулём": [
+      "        if self.price_input_per_1m is None or self.price_output_per_1m is None:\n            return None",
+      "        if self.price_input_per_1m is None or self.price_output_per_1m is None:\n            return 0.0"
+    ],
+    "не различать коды ошибок": [
+      "    if status == 401:",
+      "    if False:"
+    ],
+    "молча глотать ошибочный код ответа": [
+      "        if response.status_code != 200:",
+      "        if False:"
+    ]
+  }
+}

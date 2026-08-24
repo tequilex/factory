@@ -169,13 +169,19 @@ class TestFactcheck:
         assert post_row(pipeline["conn"], pipeline["post_id"])["factcheck_verdict"] is None
 
     def test_repeat_run_does_not_call_the_llm_again(self, pipeline):
+        """Считать надо обращения к модели ФАКТЧЕКА, а не к модели текста.
+
+        Раньше тест смотрел на providers.llm — после разделения моделей он
+        перестал что-либо проверять, потому что фактчек туда не ходит вовсе.
+        """
         pipeline["advance_through"](State.QUEUED)
         pipeline["run"](State.TEXT_READY)
-        before = pipeline["providers"].llm.calls
+        before = pipeline["providers"].factcheck.calls
+        assert before > 0, "первый фактчек вообще не обратился к модели"
 
         pipeline["run"](State.TEXT_READY)
 
-        assert pipeline["providers"].llm.calls == before
+        assert pipeline["providers"].factcheck.calls == before
 
     def test_verdict_fixed_replaces_the_body(self, pipeline):
         """SPEC: «fixed → заменяем body». Заглушка всегда отвечает ok, поэтому
@@ -185,7 +191,7 @@ class TestFactcheck:
 
         pipeline["advance_through"](State.QUEUED)
         original = post_row(pipeline["conn"], pipeline["post_id"])["body"]
-        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: FactcheckResult(
             verdict="fixed",
             corrected_body="Исправленный текст с верными датами.",
             notes="поправлен год",
@@ -205,7 +211,7 @@ class TestFactcheck:
 
         pipeline["advance_through"](State.QUEUED)
         original = post_row(pipeline["conn"], pipeline["post_id"])["body"]
-        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: FactcheckResult(
             verdict="fixed", corrected_body=None
         )
 
@@ -218,7 +224,7 @@ class TestFactcheck:
         from factory.providers.base import FactcheckResult
 
         pipeline["advance_through"](State.QUEUED)
-        pipeline["providers"].llm.complete = lambda s, u, *, schema=None: FactcheckResult(
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: FactcheckResult(
             verdict="uncertain", notes="не нашёл подтверждения по дате основания"
         )
 
@@ -227,7 +233,115 @@ class TestFactcheck:
         row = post_row(pipeline["conn"], pipeline["post_id"])
         assert result.advanced, "неуверенный фактчек не должен останавливать пост"
         assert row["factcheck_verdict"] == "uncertain"
-        assert row["factcheck_notes"] == "не нашёл подтверждения по дате основания"
+        assert "не нашёл подтверждения по дате основания" in row["factcheck_notes"]
+
+
+class TestFactcheckHonesty:
+    """Фактчек не должен выглядеть надёжнее, чем он есть.
+
+    Проверено живьём: модель без веб-поиска одобрила текст, где штраф был
+    завышен в сто раз, и сослалась на несуществующий пункт приказа. Вердикт
+    «ok» от такой модели ничего не значит — но выглядит как проверка.
+    """
+
+    def test_check_without_search_says_so_in_the_notes(self, pipeline):
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        assert pipeline["project"].llm.factcheck_web_search is False
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: FactcheckResult(
+            verdict="ok", notes="всё сходится"
+        )
+
+        pipeline["run"](State.TEXT_READY)
+
+        notes = post_row(pipeline["conn"], pipeline["post_id"])["factcheck_notes"]
+        assert "без поиска по источникам" in notes
+        assert "всё сходится" in notes
+
+    def test_check_with_search_adds_no_disclaimer(self, pipeline):
+        from factory.providers.base import FactcheckResult
+
+        project = pipeline["project"]
+        with_search = project.model_copy(
+            update={"llm": project.llm.model_copy(update={"factcheck_web_search": True})}
+        )
+        pipeline["advance_through"](State.QUEUED)
+
+        ctx = pipeline["context"](State.TEXT_READY)
+        ctx.project = with_search
+        ctx.providers.factcheck.complete = lambda s, u, *, schema=None: FactcheckResult(
+            verdict="ok", notes="проверено по источникам"
+        )
+        handler_for(State.TEXT_READY)(ctx)
+
+        notes = post_row(pipeline["conn"], pipeline["post_id"])["factcheck_notes"]
+        assert "без поиска" not in notes
+
+    def test_the_prompt_differs_between_the_two_modes(self, pipeline):
+        """Модели без поиска прямо запрещается ставить ok при наличии фактов."""
+        from factory.core.steps import factcheck as step
+
+        assert "интернете" in step.SYSTEM_STRICT
+        assert "без доступа к интернету" in step.SYSTEM_LIGHT
+        assert "uncertain" in step.SYSTEM_LIGHT
+
+    def test_the_step_actually_sends_the_matching_prompt(self, pipeline):
+        """Сверять сами константы мало: шаг должен выбирать из них правильную.
+
+        Без этой проверки подмена «всегда строгий промпт» проходит незаметно, и
+        модель без поиска получает задание проверять по источникам, которых у
+        неё нет.
+        """
+        from factory.core.steps import factcheck as step
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        sent: list[str] = []
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: (
+            sent.append(s) or FactcheckResult(verdict="ok")
+        )
+
+        assert pipeline["project"].llm.factcheck_web_search is False
+        pipeline["run"](State.TEXT_READY)
+
+        assert sent[0] == step.SYSTEM_LIGHT, "модели без поиска ушёл строгий промпт"
+
+    def test_with_search_the_strict_prompt_is_sent(self, pipeline):
+        from factory.core.steps import factcheck as step
+        from factory.providers.base import FactcheckResult
+
+        project = pipeline["project"]
+        with_search = project.model_copy(
+            update={"llm": project.llm.model_copy(update={"factcheck_web_search": True})}
+        )
+        pipeline["advance_through"](State.QUEUED)
+        sent: list[str] = []
+
+        ctx = pipeline["context"](State.TEXT_READY)
+        ctx.project = with_search
+        ctx.providers.factcheck.complete = lambda s, u, *, schema=None: (
+            sent.append(s) or FactcheckResult(verdict="ok")
+        )
+        handler_for(State.TEXT_READY)(ctx)
+
+        assert sent[0] == step.SYSTEM_STRICT
+
+    def test_factcheck_uses_its_own_model_not_the_writer(self, pipeline):
+        """Иначе экономия на модели текста тихо распространяется на проверку."""
+        from factory.providers.base import FactcheckResult
+
+        pipeline["advance_through"](State.QUEUED)
+        writer_calls = pipeline["providers"].llm.calls
+        used = []
+        pipeline["providers"].factcheck.complete = lambda s, u, *, schema=None: (
+            used.append(1) or FactcheckResult(verdict="ok")
+        )
+
+        pipeline["run"](State.TEXT_READY)
+
+        assert used == [1], "шаг не обратился к модели фактчека"
+        assert pipeline["providers"].llm.calls == writer_calls, "дёрнул модель текста"
 
 
 class TestPrompts:
@@ -751,3 +865,74 @@ class TestPublish:
         assert result.advanced
         assert pipeline["providers"].publisher.calls == before
         assert post_row(pipeline["conn"], pipeline["post_id"])["external_id"] == "vk_777"
+
+
+class TestCostIsRecorded:
+    """Стоимость вызовов обязана попадать в runs.
+
+    Дыра, прожившая до Этапа 3: tracked_call читал цену с того, что вернул шаг,
+    а шаг возвращает StepResult — цена оставалась внутри, на ответе провайдера.
+    Пока провайдеры были заглушками с нулевой ценой, заметить было нечем.
+    """
+
+    def _priced(self, pipeline, provider_name, value):
+        from factory.core.retry import with_cost
+
+        provider = getattr(pipeline["providers"], provider_name)
+        original = provider.complete
+
+        def priced(system, user, *, schema=None):
+            return with_cost(original(system, user, schema=schema), value)
+
+        provider.complete = priced
+
+    def _runs(self, pipeline):
+        return pipeline["conn"].execute(
+            "SELECT step, cost_usd FROM runs ORDER BY id"
+        ).fetchall()
+
+    def test_text_step_records_what_it_spent(self, pipeline):
+        self._priced(pipeline, "llm", 0.0123)
+
+        pipeline["run"](State.QUEUED)
+
+        rows = self._runs(pipeline)
+        assert rows[-1]["cost_usd"] == pytest.approx(0.0123)
+
+    def test_factcheck_step_records_what_it_spent(self, pipeline):
+        pipeline["advance_through"](State.QUEUED)
+        self._priced(pipeline, "factcheck", 0.0456)
+
+        pipeline["run"](State.TEXT_READY)
+
+        assert self._runs(pipeline)[-1]["cost_usd"] == pytest.approx(0.0456)
+
+    def test_prompts_step_records_what_it_spent(self, pipeline):
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY)
+        self._priced(pipeline, "llm", 0.0078)
+
+        pipeline["run"](State.FACTCHECKED)
+
+        assert self._runs(pipeline)[-1]["cost_usd"] == pytest.approx(0.0078)
+
+    def test_steps_without_provider_calls_record_nothing(self, pipeline):
+        """Ноль вместо неизвестности занизил бы отчёт о тратах."""
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED, State.PROMPTS_READY
+        )
+
+        pipeline["run"](State.IMAGES_READY)
+
+        assert self._runs(pipeline)[-1]["cost_usd"] is None
+
+    def test_total_spending_can_be_summed_per_post(self, pipeline):
+        """На этом строится и factory stats, и лимит стоимости поста."""
+        self._priced(pipeline, "llm", 0.01)
+        pipeline["run"](State.QUEUED)
+        self._priced(pipeline, "factcheck", 0.02)
+        pipeline["run"](State.TEXT_READY)
+
+        total = pipeline["conn"].execute(
+            "SELECT SUM(cost_usd) FROM runs WHERE post_id = ?", (pipeline["post_id"],)
+        ).fetchone()[0]
+        assert total == pytest.approx(0.03)

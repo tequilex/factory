@@ -53,8 +53,15 @@ class Cost:
 _COST_ATTR = "_factory_cost_usd"
 
 
-def with_cost(result: Any, usd: float) -> Any:
-    """Tag a provider result with its price so ``tracked_call`` can record it."""
+def with_cost(result: Any, usd: float | None) -> Any:
+    """Tag a provider result with its price so ``tracked_call`` can record it.
+
+    ``None`` means the price is unknown — prices live in the project config and
+    are optional, because the owner may not care or may not know them. An unknown
+    price is recorded as unknown; guessing zero would quietly understate spending.
+    """
+    if usd is None:
+        return result
     try:
         object.__setattr__(result, _COST_ATTR, usd)
     except (AttributeError, TypeError):
@@ -64,8 +71,12 @@ def with_cost(result: Any, usd: float) -> Any:
     return result
 
 
-def _cost_of(result: Any) -> float | None:
+def cost_of(result: Any) -> float | None:
+    """Цена, прикреплённая к результату провайдера, если она известна."""
     return getattr(result, _COST_ATTR, None)
+
+
+_cost_of = cost_of  # прежнее имя, используется тестами
 
 
 def _retry_after_sec(exc: httpx.HTTPStatusError) -> float | None:
@@ -175,7 +186,7 @@ def tracked_call(
                         ok=True,
                         duration_ms=duration_ms,
                         post_id=target_post,
-                        cost_usd=_cost_of(result),
+                        cost_usd=_spent_by(args) or cost_of(result),
                     )
                 return result
 
@@ -204,6 +215,19 @@ def _conn_from(args: tuple[Any, ...]) -> sqlite3.Connection | None:
             return found
         if isinstance(candidate, sqlite3.Connection):
             return candidate
+    return None
+
+
+def _spent_by(args: tuple[Any, ...]) -> float | None:
+    """Сколько шаг потратил на вызовы провайдеров.
+
+    Шаг возвращает StepResult, а цену знает ответ провайдера внутри шага.
+    Поэтому стоимость копится в контексте, а не едет с результатом.
+    """
+    for candidate in args[:1]:
+        spent = getattr(candidate, "spent", None)
+        if isinstance(spent, (int, float)) and spent > 0:
+            return float(spent)
     return None
 
 

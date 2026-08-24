@@ -60,6 +60,24 @@ class StepContext:
     providers: Providers
     log: Logger
 
+    # Накопленная стоимость вызовов за этот шаг. Заполняется через charge(),
+    # читается декоратором tracked_call и попадает в таблицу runs.
+    #
+    # Так, а не через возвращаемое значение: шаг возвращает StepResult, а цену
+    # знает ответ провайдера, который остаётся внутри шага. Без этого поля
+    # стоимость молча терялась — и заметить это можно было только на живых
+    # моделях, когда цена перестала быть нулём.
+    spent: float = 0.0
+
+    def charge(self, result: object) -> object:
+        """Учесть стоимость ответа провайдера. Возвращает его же, для цепочки."""
+        from factory.core.retry import cost_of
+
+        price = cost_of(result)
+        if price is not None:
+            self.spent += price
+        return result
+
 
 Handler = Callable[[StepContext], StepResult]
 

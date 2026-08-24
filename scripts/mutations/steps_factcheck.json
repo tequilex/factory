@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/steps/factcheck.py",
+  "tests": "tests/test_transitions.py",
+  "mutations": {
+    "фактчек ходит в модель текста вместо своей": [
+      "        ctx.providers.factcheck.complete(system, ctx.post.body or \"\", schema=FactcheckResult)",
+      "        ctx.providers.llm.complete(system, ctx.post.body or \"\", schema=FactcheckResult)"
+    ],
+    "не предупреждать, что проверки по источникам не было": [
+      "    if not with_search:\n        notes = f\"{NO_SEARCH_NOTE} {notes}\".strip()",
+      "    if False:\n        notes = f\"{NO_SEARCH_NOTE} {notes}\".strip()"
+    ],
+    "давать модели без поиска тот же промпт, что и с поиском": [
+      "    system = SYSTEM_STRICT if with_search else SYSTEM_LIGHT",
+      "    system = SYSTEM_STRICT"
+    ],
+    "не заменять текст при вердикте fixed": [
+      "    if result.verdict == \"fixed\" and result.corrected_body:",
+      "    if False:"
+    ],
+    "не записывать вердикт": [
+      "            (body, result.verdict, notes, to_iso(now_utc()), ctx.post.id),",
+      "            (body, None, notes, to_iso(now_utc()), ctx.post.id),"
+    ],
+    "не записывать заметки фактчека": [
+      "            (body, result.verdict, notes, to_iso(now_utc()), ctx.post.id),",
+      "            (body, result.verdict, None, to_iso(now_utc()), ctx.post.id),"
+    ],
+    "делать фактчек даже когда он выключен": [
+      "    if mode == \"off\":",
+      "    if False:"
+    ],
+    "делать фактчек повторно": [
+      "    if ctx.post.factcheck_verdict:",
+      "    if False:"
+    ],
+    "не учитывать стоимость вызова": [
+      "    result = ctx.charge(\n        ctx.providers.factcheck.complete(system, ctx.post.body or \"\", schema=FactcheckResult)\n    )",
+      "    result = ctx.providers.factcheck.complete(system, ctx.post.body or \"\", schema=FactcheckResult)"
+    ]
+  }
+}

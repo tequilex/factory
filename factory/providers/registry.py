@@ -17,17 +17,50 @@ from factory.providers.base import ImageProvider, LLMProvider, Publisher
 
 @dataclass(slots=True)
 class Providers:
-    """The three services a step may reach for. Built once per project per tick."""
+    """The services a step may reach for. Built once per project per tick.
+
+    ``factcheck`` is a separate object from ``llm`` on purpose. Checking facts and
+    writing prose are different jobs: proved live that a model without web search
+    approved a text where a fine was overstated a hundredfold, and cited a
+    non-existent regulation while doing it. The cheap model writes; a model that
+    can look things up checks.
+    """
 
     llm: LLMProvider
     images: ImageProvider
     publisher: Publisher
+    factcheck: LLMProvider
 
 
-def _stub_llm(config: ProjectConfig):
+def _stub_llm(config: ProjectConfig, *, factcheck: bool = False):
     from factory.providers.llm.stub import StubLLM
 
     return StubLLM(model=config.llm.model)
+
+
+def _openai_compatible(config: ProjectConfig, *, factcheck: bool = False):
+    from factory.core.config import resolve_secret
+    from factory.providers.llm.openai_compatible import OpenAICompatibleLLM
+
+    llm = config.llm
+    role = "фактчека" if factcheck else "написания текстов"
+    model = (llm.factcheck_model or llm.model) if factcheck else llm.model
+    prices = (
+        (llm.factcheck_price_input_per_1m, llm.factcheck_price_output_per_1m)
+        if factcheck
+        else (llm.price_input_per_1m, llm.price_output_per_1m)
+    )
+
+    return OpenAICompatibleLLM(
+        base_url=resolve_secret(llm.base_url_env, context=f"адреса API для {role}"),
+        api_key=resolve_secret(llm.api_key_env, context=f"модели {role}"),
+        model=model,
+        max_tokens=llm.max_tokens,
+        temperature=llm.temperature,
+        price_input_per_1m=prices[0],
+        price_output_per_1m=prices[1],
+        proxy_env=llm.proxy_env,
+    )
 
 
 def _stub_images(config: ProjectConfig):
@@ -65,8 +98,9 @@ def _vk_publisher(config: ProjectConfig):
 
 # Real implementations arrive in later stages; the names are already accepted by
 # the config so a project can be written before its provider exists.
-LLM_BUILDERS: dict[str, Callable[[ProjectConfig], LLMProvider]] = {
+LLM_BUILDERS: dict[str, Callable[..., LLMProvider]] = {
     "stub": _stub_llm,
+    "openai_compatible": _openai_compatible,
 }
 
 IMAGE_BUILDERS: dict[str, Callable[[ProjectConfig], ImageProvider]] = {
@@ -79,16 +113,22 @@ PUBLISHER_BUILDERS: dict[str, Callable[[ProjectConfig], Publisher]] = {
 }
 
 _STAGE_OF = {
-    "openai_compatible": "Этапе 3",
     "anthropic": "Этапе 3",
     "replicate": "Этапе 4",
 }
 
 
-def _build(kind: str, name: str, builders: dict, allowed: tuple[str, ...], config: ProjectConfig):
+def _build(
+    kind: str,
+    name: str,
+    builders: dict,
+    allowed: tuple[str, ...],
+    config: ProjectConfig,
+    **extra,
+):
     builder = builders.get(name)
     if builder is not None:
-        return builder(config)
+        return builder(config, **extra) if extra else builder(config)
 
     if name in allowed:
         stage = _STAGE_OF.get(name, "одном из следующих этапов")
@@ -110,8 +150,13 @@ def _build(kind: str, name: str, builders: dict, allowed: tuple[str, ...], confi
 
 def build_providers(config: ProjectConfig) -> Providers:
     """Instantiate all three providers a project needs."""
+    llm_name = config.llm.provider
     return Providers(
-        llm=_build("llm", config.llm.provider, LLM_BUILDERS, LLM_PROVIDERS, config),
+        llm=_build("llm", llm_name, LLM_BUILDERS, LLM_PROVIDERS, config),
+        # Отдельный объект: у фактчека своя модель и свои цены.
+        factcheck=_build(
+            "llm", llm_name, LLM_BUILDERS, LLM_PROVIDERS, config, factcheck=True
+        ),
         images=_build("image", config.image.provider, IMAGE_BUILDERS, IMAGE_PROVIDERS, config),
         publisher=_build(
             "publisher", config.publisher.provider, PUBLISHER_BUILDERS, PUBLISHER_PROVIDERS, config

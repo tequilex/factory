@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from factory.core import paths
 from factory.core.errors import ConfigError
+from factory.core.logging import get_logger
 
 # Which provider names a config may name. The implementations live in
 # factory/providers/registry.py; a test there asserts the two lists agree.
@@ -31,6 +32,8 @@ IMAGE_PROVIDERS = ("stub", "replicate")
 PUBLISHER_PROVIDERS = ("stub", "vk")
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+log = get_logger(__name__)
 
 
 class _Section(BaseModel):
@@ -93,6 +96,40 @@ class LlmCfg(_Section):
     base_url_env: str | None = None
     api_key_env: str | None = None
     proxy_env: str | None = None
+
+    # Щедро по умолчанию. Модель с рассуждениями тратит лимит на размышления и
+    # при тесном бюджете возвращает пустой ответ с кодом 200 — проверено живьём
+    # на deepseek-v4-flash: при 1200 токенах пусто, при 4000 нормально.
+    max_tokens: int = Field(default=4000, ge=256)
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+
+    # Цены за миллион токенов в валюте провайдера. Необязательны: без них
+    # система работает, но не может ответить, куда уходят деньги.
+    price_input_per_1m: float | None = Field(default=None, ge=0)
+    price_output_per_1m: float | None = Field(default=None, ge=0)
+    factcheck_price_input_per_1m: float | None = Field(default=None, ge=0)
+    factcheck_price_output_per_1m: float | None = Field(default=None, ge=0)
+
+    # Умеет ли модель фактчека искать в интернете. Объявляется владельцем,
+    # а не угадывается по имени: список моделей с поиском меняется, и
+    # угадывание однажды тихо пропустит проверку, которая не работает.
+    factcheck_web_search: bool = False
+
+    @model_validator(mode="after")
+    def _real_provider_needs_credentials(self) -> LlmCfg:
+        if self.provider == "stub":
+            return self
+        missing = [
+            name
+            for name, value in (("api_key_env", self.api_key_env), ("base_url_env", self.base_url_env))
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"для llm.provider: {self.provider} нужны поля {', '.join(missing)} — "
+                "имена переменных окружения с ключом и адресом API"
+            )
+        return self
 
 
 class ImageCfg(_Section):
@@ -183,6 +220,30 @@ class ProjectConfig(_Section):
                 f"в vk.schedule {len(self.vk.schedule)} слотов, а posts_per_day = "
                 f"{self.limits.posts_per_day}. В каждый слот уходит один пост, поэтому "
                 f"нужно минимум {self.limits.posts_per_day} слотов"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _strict_factcheck_needs_web_search(self) -> ProjectConfig:
+        """Строгий фактчек без веб-поиска — обман, а не проверка.
+
+        Проверено живьём: модель без доступа к источникам одобрила текст, где
+        штраф был завышен в сто раз, и уверенно сослалась на несуществующий
+        пункт приказа. Вердикт «ok» от такой модели не значит ничего, но
+        выглядит как проверка — и это хуже, чем её отсутствие.
+
+        Поэтому: ``strict`` требует модель с поиском, ``light`` довольствуется
+        проверкой внутренних противоречий и честно об этом говорит.
+        """
+        if self.content.factcheck != "strict" or self.llm.provider == "stub":
+            return self
+
+        if not self.llm.factcheck_web_search:
+            raise ValueError(
+                "content.factcheck: strict требует модель с веб-поиском, иначе "
+                "проверка ничего не проверяет. Либо укажи такую модель в "
+                "llm.factcheck_model и поставь llm.factcheck_web_search: true "
+                "(например, perplexity/sonar), либо поставь content.factcheck: light"
             )
         return self
 
@@ -300,23 +361,46 @@ def _translate(exc: ValidationError, source: Path) -> ConfigError:
 def load_env_file(path: Path | None = None) -> int:
     """Load ``KEY=value`` lines from the secrets file into the environment.
 
-    Real environment variables win, so ``docker compose`` (which passes them
-    directly) and a local shell both behave the same way. Returns how many
-    variables were taken from the file.
+    Two rules, both chosen to match how the file is actually edited:
+
+    * **the last line wins.** RUNBOOK tells the owner to add keys with ``>>``,
+      so a re-run leaves two lines with the same name. Taking the first one
+      would silently keep the stale value — which is exactly how a placeholder
+      once beat a real key and cost an hour of confusion;
+    * **real environment variables win over the file**, so ``docker compose``
+      (which passes them directly) and a local shell behave the same way.
+
+    Returns how many variables were taken from the file.
     """
     target = path or paths.env_file()
     if not target.is_file():
         return 0
 
-    loaded = 0
+    from_file: dict[str, str] = {}
+    duplicates: list[str] = []
+
     for raw in target.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         name, _, value = line.partition("=")
         name = name.strip()
-        if name and name not in os.environ:
-            os.environ[name] = value.strip().strip('"').strip("'")
+        if not name:
+            continue
+        if name in from_file:
+            duplicates.append(name)
+        from_file[name] = value.strip().strip('"').strip("'")
+
+    if duplicates:
+        log.warning(
+            "в файле секретов есть повторяющиеся строки, взято последнее значение",
+            extra={"file": str(target), "names": sorted(set(duplicates))},
+        )
+
+    loaded = 0
+    for name, value in from_file.items():
+        if name not in os.environ:
+            os.environ[name] = value
             loaded += 1
     return loaded
 

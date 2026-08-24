@@ -29,9 +29,27 @@ persona:
   style_examples: prompts/examples/
 
 llm:
-  provider: stub
-  model: "stub"
-  factcheck_model: "stub"
+  provider: openai_compatible
+  base_url_env: LLM_BASE_URL       # https://routerai.ru/api/v1
+  api_key_env: LLM_API_KEY
+
+  # Пишет тексты: дёшево и живо по-русски.
+  model: "deepseek/deepseek-v3.2"
+  price_input_per_1m: 22.5         # ₽ за миллион токенов
+  price_output_per_1m: 33.4
+
+  # Проверяет факты — ОТДЕЛЬНАЯ модель, и это принципиально.
+  # Проверено живьём: модель без поиска одобрила текст, где штраф был завышен
+  # в сто раз, и сослалась на несуществующий пункт приказа.
+  factcheck_model: "perplexity/sonar"
+  factcheck_web_search: true
+  factcheck_price_input_per_1m: 107.8
+  factcheck_price_output_per_1m: 107.8
+
+  # С запасом: модель с рассуждениями тратит лимит на размышления и при
+  # тесном бюджете возвращает пустой ответ.
+  max_tokens: 4000
+  temperature: 1.0
 
 image:
   provider: stub

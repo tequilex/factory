@@ -376,3 +376,136 @@ class TestEnvFile:
 
     def test_missing_file_is_not_an_error(self, tmp_env):
         assert config.load_env_file() == 0
+
+
+class TestDuplicateLines:
+    """RUNBOOK учит дописывать ключи через `>>`, значит дубли неизбежны.
+
+    Один раз это уже стоило часа: строка-заглушка осталась первой, настоящий
+    ключ — второй, и загрузчик молча взял заглушку.
+    """
+
+    def test_the_last_line_wins(self, tmp_env, monkeypatch):
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        paths.env_file().write_text(
+            "LLM_API_KEY=СЮДА_КЛЮЧ\nLLM_API_KEY=sk-настоящий\n", encoding="utf-8"
+        )
+
+        config.load_env_file()
+
+        assert config.resolve_secret("LLM_API_KEY", context="LLM") == "sk-настоящий"
+
+    def test_duplicates_are_reported(self, tmp_env, monkeypatch, caplog):
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        paths.env_file().write_text(
+            "LLM_API_KEY=первый\nLLM_API_KEY=второй\n", encoding="utf-8"
+        )
+
+        with caplog.at_level("WARNING"):
+            config.load_env_file()
+
+        assert any("повторяющиеся" in record.message for record in caplog.records)
+
+    def test_each_name_is_counted_once(self, tmp_env, monkeypatch):
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        paths.env_file().write_text(
+            "LLM_API_KEY=a\nLLM_BASE_URL=b\nLLM_API_KEY=c\n", encoding="utf-8"
+        )
+
+        assert config.load_env_file() == 2
+
+    def test_real_environment_still_wins_over_duplicates(self, tmp_env, monkeypatch):
+        monkeypatch.setenv("LLM_API_KEY", "sk-из-окружения")
+        paths.env_file().write_text(
+            "LLM_API_KEY=первый\nLLM_API_KEY=второй\n", encoding="utf-8"
+        )
+
+        config.load_env_file()
+
+        assert config.resolve_secret("LLM_API_KEY", context="LLM") == "sk-из-окружения"
+
+
+class TestFactcheckHonesty:
+    """Строгий фактчек без веб-поиска — обман, а не проверка.
+
+    Модель без источников одобрила текст с ошибкой в сто раз и сослалась на
+    несуществующий пункт приказа. Конфиг обязан такое не пропускать.
+    """
+
+    def test_strict_without_web_search_is_refused(self, demo_project):
+        def mutate(data):
+            data["llm"]["provider"] = "openai_compatible"
+            data["llm"]["base_url_env"] = "LLM_BASE_URL"
+            data["llm"]["api_key_env"] = "LLM_API_KEY"
+            data["content"]["factcheck"] = "strict"
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        message = str(excinfo.value)
+        assert "factcheck_web_search" in message
+        assert "content.factcheck: light" in message
+
+    def test_strict_with_web_search_is_accepted(self, demo_project):
+        def mutate(data):
+            data["llm"].update(
+                provider="openai_compatible",
+                base_url_env="LLM_BASE_URL",
+                api_key_env="LLM_API_KEY",
+                factcheck_model="perplexity/sonar",
+                factcheck_web_search=True,
+            )
+            data["content"]["factcheck"] = "strict"
+
+        rewrite(demo_project, mutate)
+
+        cfg = config.load_project("demo")
+
+        assert cfg.llm.factcheck_web_search is True
+        assert cfg.llm.factcheck_model == "perplexity/sonar"
+
+    def test_light_does_not_require_search(self, demo_project):
+        def mutate(data):
+            data["llm"].update(
+                provider="openai_compatible",
+                base_url_env="LLM_BASE_URL",
+                api_key_env="LLM_API_KEY",
+            )
+            data["content"]["factcheck"] = "light"
+
+        rewrite(demo_project, mutate)
+
+        assert config.load_project("demo").content.factcheck == "light"
+
+    def test_the_stub_project_is_not_bothered(self, demo_project):
+        """Учебный проект никуда не ходит — требовать от него поиска бессмысленно."""
+        cfg = config.load_project("demo")
+
+        assert cfg.content.factcheck == "strict"
+        assert cfg.llm.provider == "stub"
+
+
+class TestRealLlmCredentials:
+    def test_missing_key_and_address_are_both_named(self, demo_project):
+        rewrite(demo_project, lambda data: data["llm"].update(provider="openai_compatible"))
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        message = str(excinfo.value)
+        assert "api_key_env" in message
+        assert "base_url_env" in message
+
+    def test_token_limit_has_a_generous_default(self, demo_project):
+        """Модель с рассуждениями при тесном лимите возвращает пустоту."""
+        cfg = config.load_project("demo")
+
+        assert cfg.llm.max_tokens == 4000
+
+    def test_prices_are_optional(self, demo_project):
+        cfg = config.load_project("demo")
+
+        assert cfg.llm.price_input_per_1m is None

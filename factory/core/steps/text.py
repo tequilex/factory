@@ -54,7 +54,7 @@ def run(ctx: StepContext) -> StepResult:
         return advanced(State.TEXT_READY)
 
     system, user = build_prompt(ctx)
-    draft = ctx.providers.llm.complete(system, user, schema=PostDraft)
+    draft = ctx.charge(ctx.providers.llm.complete(system, user, schema=PostDraft))
 
     with db.write_transaction(ctx.conn):
         ctx.conn.execute(
