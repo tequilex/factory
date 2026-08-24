@@ -30,6 +30,7 @@ from factory.core.logging import get_logger
 LLM_PROVIDERS = ("stub", "openai_compatible", "anthropic")
 IMAGE_PROVIDERS = ("stub", "replicate")
 PUBLISHER_PROVIDERS = ("stub", "vk")
+NOTIFIER_PROVIDERS = ("stub", "telegram")
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -177,6 +178,9 @@ class TelegramCfg(_Section):
     Чат и список проверяющих — наоборот, у каждой ниши свои.
     """
 
+    provider: Literal[NOTIFIER_PROVIDERS] = "telegram"  # type: ignore[valid-type]
+    token_env: str = "TELEGRAM_BOT_TOKEN"
+    proxy_env: str | None = None
     chat_id: int
     reviewers: list[int] = Field(min_length=1)
 
@@ -404,52 +408,11 @@ def _translate(exc: ValidationError, source: Path) -> ConfigError:
     )
 
 
-def load_env_file(path: Path | None = None) -> int:
-    """Load ``KEY=value`` lines from the secrets file into the environment.
+def load_env_file(path: Path | None = None, *, refresh: bool = False) -> int:
+    """Совместимое имя. Реализация переехала в :mod:`factory.core.secrets`."""
+    from factory.core.secrets import load_env_file as _load
 
-    Two rules, both chosen to match how the file is actually edited:
-
-    * **the last line wins.** RUNBOOK tells the owner to add keys with ``>>``,
-      so a re-run leaves two lines with the same name. Taking the first one
-      would silently keep the stale value — which is exactly how a placeholder
-      once beat a real key and cost an hour of confusion;
-    * **real environment variables win over the file**, so ``docker compose``
-      (which passes them directly) and a local shell behave the same way.
-
-    Returns how many variables were taken from the file.
-    """
-    target = path or paths.env_file()
-    if not target.is_file():
-        return 0
-
-    from_file: dict[str, str] = {}
-    duplicates: list[str] = []
-
-    for raw in target.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        name = name.strip()
-        if not name:
-            continue
-        if name in from_file:
-            duplicates.append(name)
-        from_file[name] = value.strip().strip('"').strip("'")
-
-    if duplicates:
-        log.warning(
-            "в файле секретов есть повторяющиеся строки, взято последнее значение",
-            extra={"file": str(target), "names": sorted(set(duplicates))},
-        )
-
-    loaded = 0
-    for name, value in from_file.items():
-        if name not in os.environ:
-            os.environ[name] = value
-            loaded += 1
-    return loaded
-
+    return _load(path, refresh=refresh)
 
 def resolve_secret(env_name: str, *, context: str) -> str:
     """Read a secret from the environment, or explain exactly what is missing."""

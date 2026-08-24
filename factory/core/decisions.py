@@ -17,7 +17,10 @@ step it returns to checks:
 * ``images`` checks ``local_path``, and the same image comes back if ``seed``
   stays;
 * ``compose`` checks a mark in ``external_ref`` — miss it and the old cover
-  survives a full image regeneration.
+  survives a full image regeneration;
+* ``review`` checks ``review_album_at`` before sending pictures — miss it and the
+  post comes back for a second look with no pictures at all, which is the one
+  thing the owner needs in order to look.
 
 Every decision is guarded by ``WHERE state = 'in_review'``. Pressing a button
 twice, or pressing one on an old message, updates zero rows and changes nothing.
@@ -170,7 +173,7 @@ def apply(
         # что владелец забраковал. Сообщение с кнопками больше не актуально.
         conn.execute(
             "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
-            "next_attempt_at = NULL, review_message_id = NULL, "
+            "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
             "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
             (target, stamp, by, stamp, post_id),
         )

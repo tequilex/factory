@@ -10,9 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from factory.core.config import IMAGE_PROVIDERS, LLM_PROVIDERS, PUBLISHER_PROVIDERS, ProjectConfig
+from factory.core.config import (
+    IMAGE_PROVIDERS,
+    LLM_PROVIDERS,
+    NOTIFIER_PROVIDERS,
+    PUBLISHER_PROVIDERS,
+    ProjectConfig,
+)
 from factory.core.errors import ConfigError
-from factory.providers.base import ImageProvider, LLMProvider, Publisher
+from factory.providers.base import ImageProvider, LLMProvider, Notifier, Publisher
 
 
 @dataclass(slots=True)
@@ -30,6 +36,7 @@ class Providers:
     images: ImageProvider
     publisher: Publisher
     factcheck: LLMProvider
+    notifier: Notifier
 
 
 def _stub_llm(config: ProjectConfig, *, factcheck: bool = False):
@@ -64,6 +71,23 @@ def _openai_compatible(config: ProjectConfig, *, factcheck: bool = False):
     )
 
 
+def _stub_notifier(config: ProjectConfig):
+    from factory.providers.notifiers.stub import StubNotifier
+
+    return StubNotifier()
+
+
+def _telegram_notifier(config: ProjectConfig):
+    from factory.core.config import resolve_secret
+    from factory.providers.notifiers.telegram import TelegramNotifier
+
+    telegram = config.telegram
+    return TelegramNotifier(
+        token=resolve_secret(telegram.token_env, context="бота в Telegram"),
+        proxy_env=telegram.proxy_env,
+    )
+
+
 def _stub_images(config: ProjectConfig):
     from factory.providers.images.stub import StubImages
 
@@ -92,6 +116,10 @@ def _vk_publisher(config: ProjectConfig):
             config.vk.upload_token_env,
             context=f"загрузки картинок в ВК для проекта {config.slug}",
         ),
+        # Имена переменных нужны, чтобы «ошибка 5» отвечала, какой из двух
+        # ключей менять: картинки грузит один, публикует другой.
+        token_env=config.vk.token_env,
+        upload_token_env=config.vk.upload_token_env,
         api_version=config.vk.api_version,
         proxy_env=config.vk.proxy_env,
     )
@@ -111,6 +139,11 @@ IMAGE_BUILDERS: dict[str, Callable[[ProjectConfig], ImageProvider]] = {
 PUBLISHER_BUILDERS: dict[str, Callable[[ProjectConfig], Publisher]] = {
     "stub": _stub_publisher,
     "vk": _vk_publisher,
+}
+
+NOTIFIER_BUILDERS: dict[str, Callable[[ProjectConfig], Notifier]] = {
+    "stub": _stub_notifier,
+    "telegram": _telegram_notifier,
 }
 
 _STAGE_OF = {
@@ -150,8 +183,11 @@ def _build(
 
 
 def build_providers(config: ProjectConfig) -> Providers:
-    """Instantiate all three providers a project needs."""
+    """Instantiate every provider a project needs."""
     llm_name = config.llm.provider
+    # Без секции telegram уведомлять некуда и незачем: конфиг это допускает
+    # только при review.mode: auto, где владельца ни о чём не спрашивают.
+    notifier_name = config.telegram.provider if config.telegram else "stub"
     return Providers(
         llm=_build("llm", llm_name, LLM_BUILDERS, LLM_PROVIDERS, config),
         # Отдельный объект: у фактчека своя модель и свои цены.
@@ -161,5 +197,8 @@ def build_providers(config: ProjectConfig) -> Providers:
         images=_build("image", config.image.provider, IMAGE_BUILDERS, IMAGE_PROVIDERS, config),
         publisher=_build(
             "publisher", config.publisher.provider, PUBLISHER_BUILDERS, PUBLISHER_PROVIDERS, config
+        ),
+        notifier=_build(
+            "telegram", notifier_name, NOTIFIER_BUILDERS, NOTIFIER_PROVIDERS, config
         ),
     )

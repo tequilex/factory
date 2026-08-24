@@ -65,6 +65,10 @@ def run_loop(stopper: Stopper | None = None) -> None:
 
     try:
         while not stop.stopped:
+            # Секреты перечитываются каждый тик: ключ загрузки ВК живёт сутки,
+            # и вставленный владельцем через бота новый ключ обязан подхватиться
+            # сам, а не после перезапуска воркера.
+            load_env_file(refresh=True)
             try:
                 machine.tick(conn)
             except Exception:  # noqa: BLE001 — one bad tick must not kill the worker

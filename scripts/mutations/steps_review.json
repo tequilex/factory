@@ -1,0 +1,65 @@
+{
+  "module": "factory/core/steps/review.py",
+  "tests": [
+    "tests/test_decisions.py",
+    "tests/test_transitions.py"
+  ],
+  "mutations": {
+    "спрашивать владельца даже в режиме auto": [
+      "    if ctx.project.review.mode == \"auto\":\n        return \"режим auto в конфиге\"",
+      "    if False:\n        return \"режим auto в конфиге\""
+    ],
+    "никогда не спрашивать владельца": [
+      "    needed = ctx.project.review.auto_after_n_approved",
+      "    return \"всегда\"\n    needed = ctx.project.review.auto_after_n_approved"
+    ],
+    "включать автоодобрение на один пост раньше": [
+      "    if streak >= needed:",
+      "    if streak >= needed - 1:"
+    ],
+    "не включать автоодобрение вовсе": [
+      "    if streak >= needed:",
+      "    if False:"
+    ],
+    "отправлять пост повторно": [
+      "    if ctx.post.review_message_id:",
+      "    if False:"
+    ],
+    "не запоминать сообщение с кнопками": [
+      "            \"UPDATE posts SET review_chat_id = ?, review_message_id = ?, updated_at = ? \"\n            \"WHERE id = ?\",",
+      "            \"UPDATE posts SET review_chat_id = ?, updated_at = ? WHERE id = ? AND ? IS NOT NULL\","
+    ],
+    "не показывать предупреждение фактчека": [
+      "    label = FACTCHECK_NOTE.get(verdict or \"\")",
+      "    label = None"
+    ],
+    "предупреждать даже при чистом фактчеке": [
+      "    label = FACTCHECK_NOTE.get(verdict or \"\")\n    if not label:\n        return None",
+      "    label = FACTCHECK_NOTE.get(verdict or \"\", \"проверено\")\n    if not label:\n        return None"
+    ],
+    "потерять картинки при отправке": [
+      "    return [row[\"local_path\"] for row in rows]",
+      "    return []"
+    ],
+    "показать обложку не первой": [
+      "        \"ORDER BY CASE kind WHEN 'cover' THEN 0 ELSE 1 END, position\",",
+      "        \"ORDER BY CASE kind WHEN 'cover' THEN 1 ELSE 0 END, position\","
+    ],
+    "не ждать решения, а гнать пост дальше": [
+      "    return waiting(\"жду решения владельца в Telegram\")",
+      "    return advanced(State.APPROVED)"
+    ],
+    "вернуть ретраи отправке на ревью": [
+      "@tracked_call(State.COMPOSED, attempts=1)",
+      "@tracked_call(State.COMPOSED)"
+    ],
+    "не проверять отметку об альбоме": [
+      "    if ctx.post.review_album_at is None:",
+      "    if True:"
+    ],
+    "не отмечать отправку альбома заранее": [
+      "        with db.write_transaction(ctx.conn):\n            ctx.conn.execute(\n                \"UPDATE posts SET review_album_at = ? WHERE id = ?\",\n                (to_iso(now_utc()), ctx.post.id),\n            )",
+      "        pass"
+    ]
+  }
+}

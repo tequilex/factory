@@ -169,6 +169,22 @@ def unlock() -> None:
 
 
 @app.command()
+def bot() -> None:
+    """Запустить Telegram-бота: принимать решения владельца по постам."""
+    from factory.bot import review_bot
+
+    setup_logging("INFO")
+    try:
+        review_bot.run()
+    except FactoryError as exc:
+        # Запускается по RUNBOOK отдельным сервисом: ошибка окружения тут
+        # особенно вероятна, а трейсбек вместо инструкции особенно бесполезен.
+        fail(exc)
+    except KeyboardInterrupt:
+        typer.echo("Бот остановлен.")
+
+
+@app.command()
 def run(
     once: bool = typer.Option(False, "--once", help="Один тик и выход. Для отладки."),
     loop: bool = typer.Option(False, "--loop", help="Бесконечный цикл. Режим контейнера."),

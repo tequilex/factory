@@ -1,0 +1,258 @@
+"""Отправка в Telegram обычным HTTP, без aiogram.
+
+Библиотека для ботов асинхронная, а воркер — нет. Тащить асинхронность в
+синхронный тик ради четырёх запросов значит получить зависания, которые не
+воспроизводятся. Здесь только исходящие вызовы, они прекрасно делаются тем же
+``core/http.py``, что и ВК. Приём нажатий — забота бота, отдельного процесса.
+
+Ограничения Telegram, из-за которых код такой, какой есть:
+
+* подпись под медиагруппой — 1024 символа, обычное сообщение — 4096. Пост в
+  1400 символов не влезает в подпись, поэтому текст уходит отдельно;
+* кнопки нельзя прицепить к медиагруппе, только к обычному сообщению. Значит
+  клавиатура едет с текстом, и именно его id надо запомнить;
+* бот не может написать первым. Пока владелец не отправил боту ``/start``,
+  любая отправка отвечает 403.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from factory.core import http
+from factory.core.decisions import LABEL, Decision
+from factory.core.errors import ProviderError
+from factory.core.logging import get_logger
+from factory.providers.base import ReviewMessage
+
+log = get_logger(__name__)
+
+API_BASE = "https://api.telegram.org"
+
+# Лимиты Telegram. Числа их, не наши: менять нельзя, можно только уложиться.
+MAX_MESSAGE_LENGTH = 4096
+MAX_MEDIA_IN_GROUP = 10
+
+# Клавиатура ревью. Порядок и разбивка по строкам — как в SPEC.md.
+KEYBOARD_ROWS: tuple[tuple[Decision, ...], ...] = (
+    (Decision.APPROVE, Decision.IMAGES),
+    (Decision.SCENES, Decision.TEXT),
+    (Decision.TRASH,),
+)
+
+ICON: dict[Decision, str] = {
+    Decision.APPROVE: "✅",
+    Decision.IMAGES: "🔄",
+    Decision.SCENES: "🎲",
+    Decision.TEXT: "✏️",
+    Decision.TRASH: "🗑",
+}
+
+
+def review_keyboard(post_id: int) -> dict:
+    """Клавиатура под постом. ``callback_data`` несёт номер поста и решение.
+
+    Номер поста в самой кнопке, а не в состоянии бота: бот перезапускается, а
+    сообщение с кнопками остаётся жить в переписке неделями. Кнопка обязана
+    работать после перезапуска.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": f"{ICON[item]} {LABEL[item]}",
+                    "callback_data": f"r:{post_id}:{item.value}",
+                }
+                for item in row
+            ]
+            for row in KEYBOARD_ROWS
+        ]
+    }
+
+
+def parse_callback(data: str) -> tuple[int, Decision] | None:
+    """Разобрать ``callback_data``. ``None`` — кнопка не наша или испорчена."""
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "r":
+        return None
+    try:
+        post_id = int(parts[1])
+        decision = Decision(parts[2])
+    except ValueError:
+        return None
+    return post_id, decision
+
+
+def _advice(code: int, description: str) -> str:
+    if code == 401:
+        return (
+            "Токен бота не принят. Проверь строку TELEGRAM_BOT_TOKEN в файле "
+            "секретов — возможно, бот удалён или токен перевыпущен у @BotFather."
+        )
+    if code == 403:
+        return (
+            "Бот не может написать первым — так устроен Telegram. Открой бота "
+            "и отправь ему /start, после этого сообщения будут доходить."
+        )
+    if code == 400 and "chat not found" in description.lower():
+        return (
+            "Чат не найден. Проверь telegram.chat_id в конфиге проекта: это "
+            "число выдаёт бот @userinfobot."
+        )
+    if code == 429:
+        return "Слишком часто. Система подождёт и повторит сама."
+    return f"Ответ Telegram: {description[:200]}"
+
+
+class TelegramNotifier:
+    """Уведомления владельцу через Bot API."""
+
+    name = "telegram"
+
+    def __init__(self, *, token: str, proxy_env: str | None = None) -> None:
+        self.token = token
+        self.proxy_env = proxy_env
+        self.calls = 0
+
+    def _client(self) -> httpx.Client:
+        return http.client_for("telegram", proxy_env=self.proxy_env)
+
+    def _call(self, method: str, *, data: dict, files: dict | None = None) -> Any:
+        """Один вызов Bot API. Ошибку превращает в понятную человеку."""
+        self.calls += 1
+        with self._client() as client:
+            response = client.post(
+                f"{API_BASE}/bot{self.token}/{method}", data=data, files=files
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ProviderError(
+                f"Telegram вернул не-JSON в ответ на {method}.",
+                why=f"Код {response.status_code}, начало ответа: {response.text[:120]!r}",
+                what_to_do="Обычно это временный сбой. Система повторит позже.",
+                status_code=response.status_code,
+            ) from exc
+
+        if not payload.get("ok"):
+            code = int(payload.get("error_code", response.status_code))
+            description = str(payload.get("description", ""))
+            raise ProviderError(
+                f"Telegram отказал в {method}.",
+                why=f"Код {code}: {description}",
+                what_to_do=_advice(code, description),
+                status_code=code,
+                retry_after=_retry_after(payload),
+            )
+
+        return payload.get("result")
+
+    def send_for_review(
+        self,
+        *,
+        chat_id: int,
+        project: str,
+        title: str,
+        body: str,
+        warning: str | None,
+        images: list[str],
+        post_id: int,
+    ) -> ReviewMessage:
+        """Картинки альбомом, затем текст с кнопками. Возвращает id текста."""
+        existing = [path for path in images if Path(path).is_file()]
+        if existing:
+            self._send_album(chat_id, existing[:MAX_MEDIA_IN_GROUP])
+
+        message = self._call(
+            "sendMessage",
+            data={
+                "chat_id": chat_id,
+                "text": _review_text(project, title, body, warning),
+                "reply_markup": _json(review_keyboard(post_id)),
+                "disable_web_page_preview": True,
+            },
+        )
+        return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
+
+    def _send_album(self, chat_id: int, paths: list[str]) -> None:
+        """Медиагруппа: файлы вложениями, описание — отдельным полем media."""
+        media, files = [], {}
+        for number, path in enumerate(paths):
+            key = f"file{number}"
+            media.append({"type": "photo", "media": f"attach://{key}"})
+            files[key] = (Path(path).name, Path(path).read_bytes())
+
+        self._call(
+            "sendMediaGroup", data={"chat_id": chat_id, "media": _json(media)}, files=files
+        )
+
+    def alert(self, *, chat_id: int, text: str) -> None:
+        self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})
+
+    def close_review(self, *, chat_id: int, message_id: int, verdict: str) -> None:
+        """Убрать кнопки и дописать, что выбрано.
+
+        Живая клавиатура под уже решённым постом — приглашение нажать второй раз.
+        Нажатие безвредно, но выглядит как поломка, поэтому кнопки снимаются.
+        """
+        self._call(
+            "editMessageReplyMarkup",
+            data={"chat_id": chat_id, "message_id": message_id, "reply_markup": _json({})},
+        )
+        self._call("sendMessage", data={"chat_id": chat_id, "text": verdict})
+
+
+def _retry_after(payload: dict) -> float | None:
+    parameters = payload.get("parameters") or {}
+    value = parameters.get("retry_after")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _json(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _cut(text: str) -> str:
+    """Обрезать до лимита Telegram, не потеряв конец молча."""
+    if len(text) <= MAX_MESSAGE_LENGTH:
+        return text
+    tail = "\n\n[…текст обрезан, целиком — factory post show]"
+    return text[: MAX_MESSAGE_LENGTH - len(tail)] + tail
+
+
+def _review_text(project: str, title: str, body: str, warning: str | None) -> str:
+    """Что владелец видит под картинками.
+
+    Имя проекта — первой строкой: при двух нишах иначе не понять, в какую группу
+    уйдёт пост, а кнопка «Опубликовать» выглядит одинаково.
+    """
+    parts = [f"[{project}] {title}", "", body]
+    if warning:
+        parts += ["", f"⚠️ {warning}"]
+    return _cut("\n".join(parts))
+
+
+def extract_vk_token(text: str) -> str | None:
+    """Вынуть ключ ВК из того, что прислал владелец.
+
+    Принимается и весь адрес после входа, и один ключ: адрес приходит из
+    браузера на телефоне, и просить человека аккуратно выделить подстроку между
+    двумя разделителями — верный способ получить ключ, обрезанный на символ.
+
+    Ключ ВК выглядит как ``vk1.a.<длинная строка>``. Проверка по виду, а не
+    просто «что-то после access_token=», отсекает случайно присланную ссылку.
+    """
+    import re
+
+    match = re.search(r"access_token=([A-Za-z0-9._-]+)", text)
+    candidate = match.group(1) if match else text.strip()
+
+    if not re.fullmatch(r"vk\d+\.[A-Za-z0-9._-]{20,}", candidate):
+        return None
+    return candidate

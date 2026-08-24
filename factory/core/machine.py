@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import timedelta
 
-from factory.core import db, lock, paths
+from factory.core import alerts, db, lock, paths
 from factory.core.clock import now_utc, to_iso
 from factory.core.config import ProjectConfig, load_project
 from factory.core.errors import FactoryError
@@ -281,6 +281,7 @@ def advance_post(
             result = handler_for(post.state)(ctx)
         except Exception as exc:  # noqa: BLE001 — recorded, then the chain stops
             record_failure(conn, post, exc)
+            _alert_if_hopeless(conn, config, providers, exc)
             break
 
         if result.outcome is Outcome.WAITING:
@@ -292,6 +293,28 @@ def advance_post(
         post = reload_post(conn, post.id)
 
     return done
+
+
+def _alert_if_hopeless(conn: sqlite3.Connection, config, providers, exc: BaseException) -> None:
+    """Сообщить владельцу о поломке, которую система сама не переживёт.
+
+    Протухший ключ ВК ретраями не лечится: он не станет действительным сам, и
+    пять попыток просто израсходуют бюджет поста впустую. Единственное, что тут
+    помогает, — человек, а значит человека надо позвать, а не писать в лог,
+    который он не читает.
+    """
+    token_env = getattr(exc, "token_env", None)
+    if not getattr(exc, "token_expired", False) or config.telegram is None:
+        return
+
+    alerts.raise_once(
+        conn,
+        providers.notifier,
+        chat_id=config.telegram.chat_id,
+        name="vk_token",
+        scope=config.slug,
+        text=alerts.vk_token_expired_text(config.slug, token_env or "VK_UPLOAD_TOKEN"),
+    )
 
 
 def tick(conn: sqlite3.Connection) -> dict:

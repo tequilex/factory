@@ -14,6 +14,7 @@ import pytest
 from factory.core import db
 from factory.core.decisions import Decision, apply, approvals_in_a_row
 from factory.core.models import State, TopicStatus
+from factory.core.steps import handler_for
 
 
 def post_row(conn, post_id):
@@ -275,6 +276,24 @@ class TestGuards:
         assert row["last_error"] is None
         assert row["next_attempt_at"] is None
 
+    def test_the_album_marker_is_dropped(self, in_review):
+        """Иначе пост вернётся на повторный просмотр вообще без картинок.
+
+        Отметка «альбом уже отправляли» защищает от дублей внутри одной
+        отправки. После отката это другая отправка, и картинки нужны заново —
+        особенно после «Картинки заново», где их и просили перерисовать.
+        """
+        conn, post_id = in_review["conn"], in_review["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET review_album_at = ? WHERE id = ?",
+                ("2020-01-01T00:00:00Z", post_id),
+            )
+
+        apply(conn, post_id, Decision.IMAGES)
+
+        assert post_row(conn, post_id)["review_album_at"] is None
+
     def test_the_stale_keyboard_reference_is_dropped(self, in_review):
         conn, post_id = in_review["conn"], in_review["post_id"]
         with db.write_transaction(conn):
@@ -391,3 +410,261 @@ class TestApprovalStreak:
 
         assert approvals_in_a_row(conn, in_review["project_id"]) == 1
         assert approvals_in_a_row(conn, other) == 1
+
+
+class TestSendForReview:
+    """Отправка на ревью: делает её воркер, а не бот.
+
+    Демо-проект живёт в режиме auto, поэтому все проверки здесь идут на копии
+    конфига с режимом telegram — иначе шаг уходит в ветку «ревью пропущено» и
+    ни одна из них ничего не проверяет.
+    """
+
+    @pytest.fixture
+    def asking(self, pipeline):
+        """Проект, который действительно спрашивает владельца."""
+        from factory.core.config import TelegramCfg
+
+        project = pipeline["project"]
+        pipeline["asking_project"] = project.model_copy(
+            update={
+                "review": project.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(
+                    provider="stub", chat_id=123456789, reviewers=[123456789]
+                ),
+            }
+        )
+        return pipeline
+
+    def run_send(self, pipeline, state=State.COMPOSED):
+        ctx = pipeline["context"](state)
+        ctx.project = pipeline["asking_project"]
+        return handler_for(state)(ctx), ctx
+
+    def test_the_post_is_sent_with_its_images(self, asking):
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        (sent,) = ctx.providers.notifier.sent
+        assert sent["chat_id"] == 123456789
+        assert sent["post_id"] == asking["post_id"]
+        assert sent["body"]
+        assert len(sent["images"]) == 4, "ушли не все картинки"
+
+    def test_the_cover_goes_first(self, asking):
+        """Владелец должен увидеть главное, не листая альбом."""
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        cover = asking["conn"].execute(
+            "SELECT local_path FROM assets WHERE post_id = ? AND kind = 'cover'",
+            (asking["post_id"],),
+        ).fetchone()["local_path"]
+
+        _, ctx = self.run_send(asking)
+
+        assert ctx.providers.notifier.sent[0]["images"][0] == cover
+
+    def test_the_message_id_is_remembered(self, asking):
+        """Без него после решения нельзя убрать кнопки."""
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        self.run_send(asking)
+
+        row = post_row(asking["conn"], asking["post_id"])
+        assert row["review_chat_id"] == 123456789
+        assert row["review_message_id"] is not None
+
+    def test_the_album_is_not_sent_twice_after_a_timeout(self, asking):
+        """Таймаут не значит «не дошло».
+
+        На живом прогоне владелец получил один и тот же альбом из четырёх
+        картинок три раза: ответ Telegram не успевал прийти, а повтор слал всё
+        заново. Отметка ставится до отправки — второй раз картинки не уходят.
+        """
+        import httpx
+
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        ctx = asking["context"](State.COMPOSED)
+        ctx.project = asking["asking_project"]
+        notifier = ctx.providers.notifier
+        working = notifier.send_for_review
+        attempts = []
+
+        def timeout(**kwargs):
+            # Именно таймаут, а не любая ошибка: механизм повторов считает
+            # временными сетевые сбои. С неповторяемой ошибкой возврат ретраев
+            # остался бы незаметен, и тест ничего бы не проверял.
+            attempts.append(kwargs["images"])
+            raise httpx.ReadTimeout("Telegram не ответил вовремя")
+
+        notifier.send_for_review = timeout
+        with pytest.raises(httpx.ReadTimeout):
+            handler_for(State.COMPOSED)(ctx)
+        notifier.send_for_review = working
+
+        # Повторов внутри шага быть не должно вовсе: ctx.post — снимок, и на
+        # второй попытке отметка в нём всё ещё пуста, так что картинки ушли бы
+        # заново. Именно так владелец и получил три одинаковых альбома.
+        assert len(attempts) == 1, f"отправка повторялась {len(attempts)} раза"
+        assert attempts[0], "в первой отправке не было картинок — тест не о том"
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        assert ctx.providers.notifier.sent[0]["images"] == [], "картинки ушли второй раз"
+
+    def test_a_failed_send_still_delivers_the_buttons(self, asking):
+        """Потерять кнопки хуже, чем потерять картинки: пост застрянет навсегда."""
+        from factory.core.errors import ProviderError
+
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        ctx = asking["context"](State.COMPOSED)
+        ctx.project = asking["asking_project"]
+        notifier = ctx.providers.notifier
+        working = notifier.send_for_review
+        notifier.send_for_review = lambda **kw: (_ for _ in ()).throw(
+            ProviderError("Telegram не ответил вовремя")
+        )
+        with pytest.raises(ProviderError):
+            handler_for(State.COMPOSED)(ctx)
+        notifier.send_for_review = working
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        assert len(ctx.providers.notifier.sent) == 1
+        assert ctx.providers.notifier.sent[0]["body"], "текст с кнопками не ушёл"
+
+    def test_a_repeat_does_not_send_twice(self, asking):
+        """Иначе владелец получит один пост дважды и не поймёт, какой настоящий."""
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        _, ctx = self.run_send(asking)
+        assert len(ctx.providers.notifier.sent) == 1
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        assert len(ctx.providers.notifier.sent) == 1, "пост отправлен второй раз"
+
+    def test_an_uncertain_factcheck_is_shown(self, asking):
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        with db.write_transaction(asking["conn"]):
+            asking["conn"].execute(
+                "UPDATE posts SET factcheck_verdict = 'uncertain', factcheck_notes = 'дата под вопросом' "
+                "WHERE id = ?",
+                (asking["post_id"],),
+            )
+
+        _, ctx = self.run_send(asking)
+
+        warning = ctx.providers.notifier.sent[0]["warning"]
+        assert "не уверен" in warning
+        assert "дата под вопросом" in warning
+
+    def test_a_clean_factcheck_shows_no_warning(self, asking):
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        with db.write_transaction(asking["conn"]):
+            asking["conn"].execute(
+                "UPDATE posts SET factcheck_verdict = 'ok', factcheck_notes = NULL WHERE id = ?",
+                (asking["post_id"],),
+            )
+
+        _, ctx = self.run_send(asking)
+
+        assert ctx.providers.notifier.sent[0]["warning"] is None
+
+    def test_waiting_does_not_spend_the_retry_budget(self, asking):
+        """Пост может ждать выходные — умирать от старости он не должен."""
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        self.run_send(asking)
+
+        result, _ = self.run_send(asking, State.IN_REVIEW)
+
+        assert result.outcome.value == "waiting"
+
+    def test_nothing_is_sent_in_auto_mode(self, pipeline):
+        """Режим auto — владельца не спрашивают, значит и не пишут ему."""
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        result, ctx = pipeline["run"](State.COMPOSED)
+
+        assert result.advanced
+        assert ctx.providers.notifier.sent == []
+
+    def test_a_long_clean_streak_skips_the_question(self, asking):
+        """auto_after_n_approved: подряд одобрено N постов — больше не спрашиваем."""
+        from tests.conftest import insert_post, insert_topic
+
+        conn, project_id = asking["conn"], asking["project_id"]
+        needed = asking["asking_project"].review.auto_after_n_approved
+        for number in range(needed):
+            topic = insert_topic(conn, project_id, f"Тема {number}")
+            post = insert_post(conn, project_id, topic, idem_key=f"demo:{topic}:0")
+            with db.write_transaction(conn):
+                conn.execute(
+                    "UPDATE posts SET state = ?, decided_at = ? WHERE id = ?",
+                    (State.PUBLISHED, "2020-01-01T00:00:00Z", post),
+                )
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        assert ctx.providers.notifier.sent == [], "спросили, хотя счёт одобрений набран"
+
+    def test_one_short_of_the_streak_still_asks(self, asking):
+        """Проверка границы: N-1 одобрений — вопрос ещё задаётся."""
+        from tests.conftest import insert_post, insert_topic
+
+        conn, project_id = asking["conn"], asking["project_id"]
+        needed = asking["asking_project"].review.auto_after_n_approved
+        for number in range(needed - 1):
+            topic = insert_topic(conn, project_id, f"Тема {number}")
+            post = insert_post(conn, project_id, topic, idem_key=f"demo:{topic}:0")
+            with db.write_transaction(conn):
+                conn.execute(
+                    "UPDATE posts SET state = ?, decided_at = ? WHERE id = ?",
+                    (State.PUBLISHED, "2020-01-01T00:00:00Z", post),
+                )
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        _, ctx = self.run_send(asking)
+
+        assert len(ctx.providers.notifier.sent) == 1

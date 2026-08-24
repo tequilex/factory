@@ -174,23 +174,47 @@ class TestParallelTicks:
             assert result.returncode == 0, result.stderr
         return env
 
-    def test_only_one_tick_does_the_work(self, workspace):
-        processes = [
-            subprocess.Popen(
-                ["uv", "run", "factory", "run", "--once"],
-                cwd=REPO_ROOT,
-                env=workspace,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            for _ in range(2)
-        ]
-        outputs = [process.communicate(timeout=120)[0] for process in processes]
+    def test_a_tick_refuses_to_run_while_the_lock_is_held(self, workspace):
+        """Блокировка занята — процесс обязан отступить и сказать об этом.
 
-        assert all(process.returncode == 0 for process in processes)
-        skipped = [text for text in outputs if "уже работает другой процесс" in text]
-        assert len(skipped) == 1, f"блокировка не сработала, вывод: {outputs}"
+        Раньше тест запускал два процесса и ждал, что один упрётся в другой.
+        Гонки при этом могло не случиться вовсе: `uv run` стартует за разное
+        время, и первый процесс успевал закончить весь тик до старта второго.
+        Тест падал через раз, не найдя ошибки в коде. Теперь блокировка берётся
+        явно, и проверяется ровно заявленное поведение.
+        """
+        import sqlite3
+
+        from factory.core import lock
+
+        conn = sqlite3.connect(Path(workspace["FACTORY_DATA_DIR"]) / "factory.db")
+        conn.row_factory = sqlite3.Row
+        assert lock._try_acquire(conn), "не удалось занять блокировку для проверки"
+        conn.commit()
+
+        try:
+            result = subprocess.run(
+                ["uv", "run", "factory", "run", "--once"],
+                cwd=REPO_ROOT, env=workspace, capture_output=True, text=True, timeout=120,
+            )
+        finally:
+            conn.close()
+
+        assert result.returncode == 0, result.stderr
+        assert "уже работает другой процесс" in result.stdout + result.stderr
+
+    def test_a_free_lock_lets_the_tick_through(self, workspace):
+        """Обратная половина: без занятой блокировки тик обязан отработать.
+
+        Без неё проверка выше проходила бы и у тика, который не работает вовсе.
+        """
+        result = subprocess.run(
+            ["uv", "run", "factory", "run", "--once"],
+            cwd=REPO_ROOT, env=workspace, capture_output=True, text=True, timeout=120,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "уже работает другой процесс" not in result.stdout + result.stderr
 
     def test_buffer_is_not_exceeded_by_parallel_ticks(self, workspace):
         processes = [

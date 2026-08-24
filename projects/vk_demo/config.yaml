@@ -67,7 +67,7 @@ content:
   factcheck: strict
 
 review:
-  mode: auto                     # переключить на telegram, когда бот заработает
+  mode: telegram
 
 telegram:
   # Куда приходят посты на одобрение. Узнать своё число: написать @userinfobot.

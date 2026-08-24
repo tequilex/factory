@@ -1,0 +1,54 @@
+{
+  "module": "factory/bot/review_bot.py",
+  "tests": ["tests/test_review_bot.py"],
+  "mutations": {
+    "пускать кого угодно к кнопкам": [
+      "    return user_id in project.telegram.reviewers",
+      "    return True"
+    ],
+    "не проверять, чей это проект": [
+      "    project = projects.get(slug or \"\")\n    if project is None or project.telegram is None:\n        return False",
+      "    project = next(iter(projects.values()), None)\n    if project is None or project.telegram is None:\n        return False"
+    ],
+    "молча игнорировать постороннего": [
+      "            await query.answer(NOT_YOURS, show_alert=True)\n            return",
+      "            return"
+    ],
+    "применять испорченную кнопку наугад": [
+      "        if parsed is None:\n            await query.answer(\"Кнопка испорчена.\", show_alert=True)\n            return",
+      "        if parsed is None:\n            parsed = (1, Decision.APPROVE)"
+    ],
+    "не сообщать, что решение уже принято": [
+      "        if not apply(conn, post_id, decision, by=query.from_user.id):\n            await query.answer(ALREADY_DONE, show_alert=True)",
+      "        if not apply(conn, post_id, decision, by=query.from_user.id):\n            await query.answer(\"\")"
+    ],
+    "не записывать, кто нажал": [
+      "        if not apply(conn, post_id, decision, by=query.from_user.id):",
+      "        if not apply(conn, post_id, decision, by=None):"
+    ],
+    "оставить кнопки после решения": [
+      "        await _drop_keyboard(query)\n        await _confirm(query, decision)",
+      "        await _confirm(query, decision)"
+    ],
+    "не объяснять, что будет дальше": [
+      "        await _confirm(query, decision)",
+      "        pass"
+    ],
+    "ронять решение из-за неубранных кнопок": [
+      "    except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика\n        log.info(\"не удалось убрать кнопки\", extra={\"reason\": str(exc)})",
+      "    except Exception as exc:  # noqa: BLE001\n        raise"
+    ],
+    "показывать статус чужих проектов": [
+      "        if project.telegram and user_id in project.telegram.reviewers",
+      "        if project.telegram"
+    ],
+    "не считать свободные темы": [
+      "            f\"  свободных тем: {free}\"",
+      "            f\"  свободных тем: {0}\""
+    ],
+    "считать ждущими постами что попало": [
+      "            \"SUM(state = ?) AS waiting, \"",
+      "            \"SUM(state != ?) AS waiting, \""
+    ]
+  }
+}

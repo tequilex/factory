@@ -47,25 +47,44 @@ EMPTY_PHOTO_ROUNDS = 4
 log = get_logger(__name__)
 
 
-class VkError(ProviderError):
-    """Ошибка ВК с разобранным кодом."""
+#: Код ВК для протухшего или отозванного ключа.
+TOKEN_EXPIRED = 5
 
-    def __init__(self, code: int, message: str, *, method: str) -> None:
+
+class VkError(ProviderError):
+    """Ошибка ВК с разобранным кодом.
+
+    ``token_env`` — имя переменной с ключом, которым делался вызов. Без него
+    «ошибка 5» не отвечает на единственный важный вопрос: какой из двух ключей
+    менять. Картинки грузит ключ пользователя, публикует ключ сообщества, и
+    протухает почти всегда первый.
+    """
+
+    def __init__(
+        self, code: int, message: str, *, method: str, token_env: str | None = None
+    ) -> None:
         self.code = code
+        self.token_env = token_env
         super().__init__(
             f"ВКонтакте отказал в вызове {method}: ошибка {code}.",
             why=message,
-            what_to_do=_advice(code, method),
+            what_to_do=_advice(code, method, token_env),
         )
 
+    @property
+    def token_expired(self) -> bool:
+        return self.code == TOKEN_EXPIRED
 
-def _advice(code: int, method: str) -> str:
+
+def _advice(code: int, method: str, token_env: str | None = None) -> str:
     """Каждая частая ошибка ВК — с инструкцией, а не с кодом наедине."""
-    if code == 5:
+    if code == TOKEN_EXPIRED:
+        which = f" ({token_env})" if token_env else ""
         return (
-            "Ключ доступа истёк или отозван. Ключ загрузки живёт 24 часа — "
-            "получи новый и положи в файл секретов. "
-            "См. RUNBOOK.md → «Обновить ключ загрузки ВК»."
+            f"Ключ доступа{which} истёк или отозван. Ключ загрузки живёт 24 часа. "
+            "Проще всего обновить через бота: он пришлёт ссылку, останется "
+            "открыть её и переслать ему адрес из строки браузера. "
+            "Вручную — см. RUNBOOK.md → «Обновить ключ загрузки ВК»."
         )
     if code == 27:
         return (
@@ -110,6 +129,8 @@ class VkPublisher:
         group_id: int,
         token: str,
         upload_token: str,
+        token_env: str | None = None,
+        upload_token_env: str | None = None,
         api_version: str = "5.199",
         proxy_env: str | None = None,
         sleep=time.sleep,
@@ -117,6 +138,8 @@ class VkPublisher:
         self.group_id = group_id
         self.token = token
         self.upload_token = upload_token
+        self.token_env = token_env
+        self.upload_token_env = upload_token_env
         self.api_version = api_version
         self.proxy_env = proxy_env
         self._sleep = sleep
@@ -125,6 +148,18 @@ class VkPublisher:
 
     def _client(self) -> httpx.Client:
         return http.client_for("vk", proxy_env=self.proxy_env)
+
+    def _env_of(self, token: str) -> str | None:
+        """Каким ключом сделан вызов — по значению, а не по методу.
+
+        Значение сравнивается, а не логируется: имя переменной владельцу нужно,
+        сам ключ в сообщениях появляться не должен.
+        """
+        if token == self.upload_token:
+            return self.upload_token_env
+        if token == self.token:
+            return self.token_env
+        return None
 
     def _call(self, client: httpx.Client, method: str, token: str, **params) -> Any:
         """Один вызов API. Ошибку ВК превращает в понятное исключение."""
@@ -149,6 +184,7 @@ class VkPublisher:
                 int(error.get("error_code", 0)),
                 str(error.get("error_msg", "")),
                 method=method,
+                token_env=self._env_of(token),
             )
         return payload["response"]
 

@@ -53,8 +53,8 @@
       "            \"UPDATE posts SET state = ?, retry_count = retry_count, last_error = NULL, \""
     ],
     "оставить ссылку на старое сообщение с кнопками": [
-      "            \"next_attempt_at = NULL, review_message_id = NULL, \"",
-      "            \"next_attempt_at = NULL, review_message_id = review_message_id, \""
+      "\"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
+      "\"next_attempt_at = NULL, review_album_at = NULL, \""
     ],
     "пустой снимок при отказе": [
       "            \"post\": dict(row) if row else {},",
@@ -79,6 +79,10 @@
     "идти от старых постов, а не от свежих": [
       "\"ORDER BY p.decided_at DESC, p.id DESC\",",
       "\"ORDER BY p.decided_at ASC, p.id ASC\","
+    ],
+    "не снимать отметку об альбоме при откате": [
+      "\"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
+      "\"next_attempt_at = NULL, review_message_id = NULL, \""
     ]
   }
 }

@@ -9,6 +9,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pillow>=10.3",
     "typer>=0.12",
+    "aiogram>=3.15,<4",
 ]
 
 [project.scripts]

@@ -171,9 +171,14 @@ class Post(_Row):
     external_id: str | None = None
     published_at: datetime | None = None
     publish_guid: str | None = None
+    review_chat_id: int | None = None
+    review_album_at: datetime | None = None
+    review_message_id: int | None = None
+    decided_at: datetime | None = None
+    decided_by: int | None = None
 
     _TIMESTAMPS: ClassVar[frozenset[str]] = frozenset(
-        {"created_at", "updated_at", "next_attempt_at", "scheduled_at", "published_at"}
+        {"created_at", "updated_at", "next_attempt_at", "scheduled_at", "published_at", "decided_at", "review_album_at"}
     )
 
     @property

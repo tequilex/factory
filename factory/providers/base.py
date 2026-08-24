@@ -1,4 +1,4 @@
-"""The three protocols every external service hides behind.
+"""The four protocols every external service hides behind.
 
 Nothing outside ``providers/`` knows whether text comes from OpenAI or from a
 stub, whether images come from Replicate or from Pillow, whether a post lands in
@@ -69,6 +69,36 @@ class ImageProvider(Protocol):
         width: int = IMAGE_WIDTH,
         height: int = IMAGE_HEIGHT,
     ) -> bytes: ...
+
+
+class ReviewMessage(BaseModel):
+    """Куда легло отправленное на ревью сообщение.
+
+    Идентификаторы нужны, чтобы после решения убрать кнопки: сообщение с живой
+    клавиатурой, по которой уже нажали, — приглашение нажать ещё раз.
+    """
+
+    chat_id: int
+    message_id: int
+
+
+@runtime_checkable
+class Notifier(Protocol):
+    """Односторонняя связь с владельцем: посты на одобрение и тревоги.
+
+    Отправкой занимается воркер, а не бот: не ушло сообщение — пост остаётся на
+    прежнем шаге и попробует снова. Иначе система считала бы, что спросила
+    владельца, а телефон при этом молчал.
+    """
+
+    def send_for_review(
+        self, *, chat_id: int, project: str, title: str, body: str,
+        warning: str | None, images: list[str], post_id: int,
+    ) -> ReviewMessage: ...
+
+    def alert(self, *, chat_id: int, text: str) -> None: ...
+
+    def close_review(self, *, chat_id: int, message_id: int, verdict: str) -> None: ...
 
 
 @runtime_checkable
