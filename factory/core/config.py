@@ -170,6 +170,30 @@ class ReviewCfg(_Section):
     auto_after_n_approved: int = Field(default=40, ge=1)
 
 
+class TelegramCfg(_Section):
+    """Куда слать посты на одобрение и кто вправе нажимать кнопки.
+
+    Токен здесь не хранится: он один на все проекты и лежит в файле секретов.
+    Чат и список проверяющих — наоборот, у каждой ниши свои.
+    """
+
+    chat_id: int
+    reviewers: list[int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _reviewers_must_be_real(self) -> TelegramCfg:
+        # Ноль — это заглушка из шаблона конфига, а не идентификатор. Пропустить
+        # её значит завести бота, у которого кнопки не работают ни у кого, и
+        # выяснить это уже на живом посте.
+        placeholders = [item for item in self.reviewers if item == 0]
+        if placeholders or self.chat_id == 0:
+            raise ValueError(
+                "в telegram.chat_id или telegram.reviewers остался ноль из шаблона. "
+                "Узнать своё число: написать в Telegram боту @userinfobot"
+            )
+        return self
+
+
 class LimitsCfg(_Section):
     posts_per_day: int = Field(default=2, ge=1)
     queue_buffer: int = Field(default=6, ge=1)
@@ -197,6 +221,7 @@ class ProjectConfig(_Section):
     image: ImageCfg
     content: ContentCfg
     review: ReviewCfg
+    telegram: TelegramCfg | None = None
     limits: LimitsCfg
     publisher: PublisherCfg = PublisherCfg(provider="vk")
 
@@ -225,6 +250,22 @@ class ProjectConfig(_Section):
                 f"в vk.schedule {len(self.vk.schedule)} слотов, а posts_per_day = "
                 f"{self.limits.posts_per_day}. В каждый слот уходит один пост, поэтому "
                 f"нужно минимум {self.limits.posts_per_day} слотов"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _telegram_review_needs_a_chat(self) -> ProjectConfig:
+        """Ревью через Telegram без адреса чата — это остановка без объяснения.
+
+        Посты дойдут до in_review и встанут там навсегда: отправлять их некуда,
+        а нажать некому. Снаружи это выглядит как «система сломалась молча» —
+        худший вид поломки для того, кто не читает код.
+        """
+        if self.review.mode == "telegram" and self.telegram is None:
+            raise ValueError(
+                "review.mode: telegram требует секцию telegram с chat_id и reviewers. "
+                "Либо добавь её, либо поставь review.mode: auto — тогда посты будут "
+                "публиковаться без одобрения"
             )
         return self
 

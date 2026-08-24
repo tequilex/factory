@@ -509,3 +509,63 @@ class TestRealLlmCredentials:
         cfg = config.load_project("demo")
 
         assert cfg.llm.price_input_per_1m is None
+
+
+class TestTelegramSection:
+    """Ревью через Telegram без адреса чата — остановка конвейера без объяснения."""
+
+    def test_telegram_mode_without_the_section_is_refused(self, demo_project):
+        rewrite(demo_project, lambda data: data["review"].update({"mode": "telegram"}))
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        message = str(excinfo.value)
+        assert "telegram" in message
+        assert "chat_id" in message
+        # Ошибка обязана называть выход, а не только проблему.
+        assert "review.mode: auto" in message
+
+    def test_auto_mode_needs_no_telegram_section(self, demo_project):
+        cfg = config.load_project("demo")
+
+        assert cfg.review.mode == "auto"
+        assert cfg.telegram is None
+
+    def test_an_empty_reviewer_list_is_an_open_door(self, demo_project):
+        """Бот ищется в Telegram поиском: без списка кнопки доступны любому."""
+
+        def mutate(data):
+            data["review"]["mode"] = "telegram"
+            data["telegram"] = {"chat_id": 123456789, "reviewers": []}
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError):
+            config.load_project("demo")
+
+    def test_the_template_placeholder_is_refused(self, demo_project):
+        """Ноль из шаблона прошёл бы как валидное число и сломал бы всё молча."""
+
+        def mutate(data):
+            data["review"]["mode"] = "telegram"
+            data["telegram"] = {"chat_id": 0, "reviewers": [0]}
+
+        rewrite(demo_project, mutate)
+
+        with pytest.raises(ConfigError) as excinfo:
+            config.load_project("demo")
+
+        assert "@userinfobot" in str(excinfo.value)
+
+    def test_a_filled_section_loads(self, demo_project):
+        def mutate(data):
+            data["review"]["mode"] = "telegram"
+            data["telegram"] = {"chat_id": 123456789, "reviewers": [123456789, 42]}
+
+        rewrite(demo_project, mutate)
+
+        cfg = config.load_project("demo")
+
+        assert cfg.telegram.chat_id == 123456789
+        assert cfg.telegram.reviewers == [123456789, 42]

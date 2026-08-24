@@ -1,0 +1,84 @@
+{
+  "module": "factory/core/decisions.py",
+  "tests": [
+    "tests/test_decisions.py"
+  ],
+  "mutations": {
+    "не стирать текст при откате «Текст заново»": [
+      "            \"UPDATE posts SET title = NULL, body = NULL, question = NULL, \"\n            \"factcheck_verdict = NULL, factcheck_notes = NULL WHERE id = ?\",",
+      "            \"UPDATE posts SET question = question WHERE id = ?\","
+    ],
+    "оставить вердикт фактчека от старого текста": [
+      "            \"UPDATE posts SET title = NULL, body = NULL, question = NULL, \"\n            \"factcheck_verdict = NULL, factcheck_notes = NULL WHERE id = ?\",",
+      "            \"UPDATE posts SET title = NULL, body = NULL, question = NULL WHERE id = ?\","
+    ],
+    "не удалять сцены при откате «Другие сцены»": [
+      "    elif decision is Decision.SCENES:\n        conn.execute(\"DELETE FROM assets WHERE post_id = ?\", (post_id,))",
+      "    elif decision is Decision.SCENES:\n        pass"
+    ],
+    "не чистить файлы картинок": [
+      "                \"UPDATE assets SET local_path = NULL, external_ref = NULL, seed = ? WHERE id = ?\",",
+      "                \"UPDATE assets SET external_ref = NULL, seed = ? WHERE id = ?\","
+    ],
+    "не менять seed — вернётся та же картинка": [
+      "                \"UPDATE assets SET local_path = NULL, external_ref = NULL, seed = ? WHERE id = ?\",\n                (random.randint(1, SEED_MAX), asset[\"id\"]),",
+      "                \"UPDATE assets SET local_path = NULL, external_ref = NULL WHERE id = ? AND ? IS NOT NULL\",\n                (asset[\"id\"], asset[\"id\"]),"
+    ],
+    "оставить метку собранной обложки": [
+      "                \"UPDATE assets SET local_path = NULL, external_ref = NULL, seed = ? WHERE id = ?\",",
+      "                \"UPDATE assets SET local_path = NULL, seed = ? WHERE id = ?\","
+    ],
+    "не возвращать тему в свободные при отказе": [
+      "            conn.execute(\n                \"UPDATE topics SET status = ? WHERE id = ?\",\n                (TopicStatus.FREE, row[\"topic_id\"]),\n            )",
+      "            pass"
+    ],
+    "освобождать тему при любом откате": [
+      "        if decision is Decision.TRASH:",
+      "        if True:"
+    ],
+    "убрать защиту от второго нажатия": [
+      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ?\",\n            (post_id, State.IN_REVIEW),",
+      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND ? IS NOT NULL\",\n            (post_id, State.IN_REVIEW),"
+    ],
+    "не записывать отказ в rejections": [
+      "        if reason is not None:",
+      "        if False:"
+    ],
+    "писать отказ и на одобрение": [
+      "        if reason is not None:",
+      "        if True:"
+    ],
+    "не сбрасывать счётчик попыток": [
+      "            \"UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, \"",
+      "            \"UPDATE posts SET state = ?, retry_count = retry_count, last_error = NULL, \""
+    ],
+    "оставить ссылку на старое сообщение с кнопками": [
+      "            \"next_attempt_at = NULL, review_message_id = NULL, \"",
+      "            \"next_attempt_at = NULL, review_message_id = review_message_id, \""
+    ],
+    "пустой снимок при отказе": [
+      "            \"post\": dict(row) if row else {},",
+      "            \"post\": {},"
+    ],
+    "не класть промпты в снимок": [
+      "            \"assets\": [dict(item) for item in prompts],",
+      "            \"assets\": [],"
+    ],
+    "считать одобрения по всем проектам сразу": [
+      "\"FROM posts p WHERE p.project_id = ? AND p.decided_at IS NOT NULL \"",
+      "\"FROM posts p WHERE ? IS NOT NULL AND p.decided_at IS NOT NULL \""
+    ],
+    "не обрывать счёт на посте, который правили": [
+      "        if row[\"was_fixed\"]:\n            break",
+      "        if False:\n            break"
+    ],
+    "считать и нерешённые посты": [
+      "\"FROM posts p WHERE p.project_id = ? AND p.decided_at IS NOT NULL \"",
+      "\"FROM posts p WHERE p.project_id = ? AND 1 = 1 \""
+    ],
+    "идти от старых постов, а не от свежих": [
+      "\"ORDER BY p.decided_at DESC, p.id DESC\",",
+      "\"ORDER BY p.decided_at ASC, p.id ASC\","
+    ]
+  }
+}

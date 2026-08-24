@@ -19,6 +19,11 @@ import httpx
 import pytest
 
 from factory.core import db, paths
+from factory.core.config import load_project
+from factory.core.logging import get_logger
+from factory.core.models import Post
+from factory.core.steps import StepContext, handler_for
+from factory.providers.registry import build_providers
 from factory.core.clock import now_utc, to_iso
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -131,3 +136,49 @@ def seeded(conn: sqlite3.Connection):
     topic_ids = [insert_topic(conn, project_id, f"Тема {i}") for i in range(1, 11)]
     conn.commit()
     return {"conn": conn, "project_id": project_id, "topic_ids": topic_ids}
+
+
+@pytest.fixture
+def pipeline(conn, demo_project):
+    """Проект demo, одна тема, один пост в состоянии queued."""
+    project = load_project("demo")
+    project_id = insert_project(conn, "demo")
+    topic_id = insert_topic(conn, project_id, "Как выбрать шины на зиму")
+    post_id = insert_post(conn, project_id, topic_id, idem_key=f"demo:{topic_id}:0")
+    conn.commit()
+
+    providers = build_providers(project)
+
+    def context(state: str | None = None) -> StepContext:
+        if state is not None:
+            with db.write_transaction(conn):
+                conn.execute("UPDATE posts SET state = ? WHERE id = ?", (state, post_id))
+        row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+        return StepContext(
+            conn=conn,
+            project=project,
+            post=Post.from_row(row),
+            providers=providers,
+            log=get_logger("test"),
+        )
+
+    def run(state: str):
+        ctx = context(state)
+        return handler_for(state)(ctx), ctx
+
+    def advance_through(*states: str):
+        for state in states:
+            result, _ = run(state)
+            assert result.advanced, f"шаг {state} не продвинулся: {result.reason}"
+
+    return {
+        "conn": conn,
+        "project": project,
+        "project_id": project_id,
+        "topic_id": topic_id,
+        "post_id": post_id,
+        "providers": providers,
+        "context": context,
+        "run": run,
+        "advance_through": advance_through,
+    }
