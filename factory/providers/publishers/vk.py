@@ -75,6 +75,13 @@ def _advice(code: int, method: str) -> str:
             "См. docs/ВК-как-это-работает.md"
         )
     if code == 15:
+        if "non-standalone" in method or method == "photos.delete":
+            return (
+                "Метод недоступен приложениям того типа, который сейчас можно "
+                "создать в ВК. Уборка оригиналов картинок из-за этого не "
+                "работает — см. docs/ВК-как-это-работает.md, раздел «Куда "
+                "девается картинка»."
+            )
         return (
             "Доступ запрещён. Проверь, что группа указана верно и ключ выдан "
             "именно для неё."
@@ -113,6 +120,8 @@ class VkPublisher:
         self.api_version = api_version
         self.proxy_env = proxy_env
         self._sleep = sleep
+        # Гасится навсегда, если ВК откажет по неустранимой причине.
+        self._cleanup_possible = True
 
     def _client(self) -> httpx.Client:
         return http.client_for("vk", proxy_env=self.proxy_env)
@@ -218,12 +227,19 @@ class VkPublisher:
         """Убирает оригиналы из служебного альбома владельца ключа загрузки.
 
         При публикации от имени сообщества ВК копирует картинку в группу, а
-        загруженный оригинал остаётся в невидимом альбоме личного профиля. Без
-        уборки они копятся годами.
+        загруженный оригинал остаётся в невидимом альбоме личного профиля.
 
-        Ошибки только логируются: пост уже опубликован, и падать из-за неубранного
-        мусора было бы куда хуже самого мусора.
+        Ошибки только логируются: пост уже опубликован, и падать из-за
+        неубранного мусора было бы куда хуже самого мусора.
+
+        Если ВК отказал по причине, которая сама не пройдёт (метод недоступен
+        приложению), уборка отключается до конца жизни объекта. Иначе на каждый
+        пост уходило бы по два обречённых вызова и по два предупреждения в лог —
+        а совет «смотри WARNING в логах» перестаёт работать, когда там шум.
         """
+        if not self._cleanup_possible:
+            return
+
         for attachment in attachments:
             try:
                 owner_id, photo_id = attachment.removeprefix("photo").split("_")
@@ -234,10 +250,23 @@ class VkPublisher:
                     owner_id=owner_id,
                     photo_id=photo_id,
                 )
+            except VkError as exc:
+                if exc.code in (15, 27):
+                    self._cleanup_possible = False
+                    log.info(
+                        "уборка оригиналов картинок недоступна этому ключу, "
+                        "больше не пытаюсь",
+                        extra={"code": exc.code},
+                    )
+                    return
+                log.warning(
+                    "не удалось убрать оригинал картинки",
+                    extra={"attachment": attachment, "code": exc.code},
+                )
             except (httpx.HTTPError, ProviderError, ValueError) as exc:
                 log.warning(
                     "не удалось убрать оригинал картинки",
-                    extra={"attachment": attachment, "reason": str(exc)},
+                    extra={"attachment": attachment, "reason": type(exc).__name__},
                 )
 
     def publish(self, post, assets) -> str:

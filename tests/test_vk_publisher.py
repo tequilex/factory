@@ -326,6 +326,59 @@ class TestCleanup:
 
         assert result == f"-{GROUP}_42"
 
+    def test_network_failure_during_cleanup_does_not_undo_the_publication(
+        self, images, monkeypatch
+    ):
+        """Обрыв связи на уборке — не ошибка ВК, и ловится другой веткой.
+
+        Без этого теста широкий except остаётся непроверенным: все остальные
+        случаи уборки перехватываются веткой VkError.
+        """
+
+        def connection_lost(recorder, body):
+            raise httpx.ConnectError("связь пропала")
+
+        recorder = Recorder({"photos.delete": connection_lost})
+
+        result = publisher(recorder, monkeypatch).publish(Post(), images)
+
+        assert result == f"-{GROUP}_42", "публикация откатилась из-за сбоя уборки"
+
+    def test_permanently_impossible_cleanup_is_attempted_only_once(
+        self, images, monkeypatch
+    ):
+        """На живом API photos.delete запрещён не-standalone приложению навсегда.
+
+        Без гашения на каждый пост уходило бы по два обречённых вызова и по два
+        предупреждения в лог — тот самый шум, из-за которого перестают читать
+        предупреждения вообще.
+        """
+        recorder = Recorder({"photos.delete": error(15, "non-standalone")})
+        publisher_instance = publisher(recorder, monkeypatch)
+
+        publisher_instance.publish(Post(), images)
+        publisher_instance.publish(Post(), images)
+
+        assert recorder.methods().count("photos.delete") == 1
+
+    def test_a_temporary_cleanup_failure_does_not_switch_it_off(
+        self, images, monkeypatch
+    ):
+        """Сетевой сбой — не повод бросать уборку навсегда."""
+        recorder = Recorder({"photos.delete": error(6, "Too many requests")})
+        publisher_instance = publisher(recorder, monkeypatch)
+
+        publisher_instance.publish(Post(), images)
+        publisher_instance.publish(Post(), images)
+
+        assert recorder.methods().count("photos.delete") == 4
+
+    def test_error_15_on_delete_explains_the_real_cause(self, images, monkeypatch):
+        """«Проверь группу» — неверный совет: дело в типе приложения."""
+        from factory.providers.publishers.vk import _advice
+
+        assert "недоступен приложениям" in _advice(15, "photos.delete")
+
 
 class TestErrorMessages:
     def test_expired_key_tells_how_to_refresh_it(self, images, monkeypatch):

@@ -1,0 +1,57 @@
+# Боевая публикация в закрытую тестовую группу ВК.
+#
+# Отличается от projects/demo только тремя строками: publisher.provider,
+# vk.group_id и vk.upload_token_env. Всё остальное — заглушки, потому что
+# на этом этапе проверяется публикация и обложка, а не качество текстов.
+#
+# Секретов здесь нет и быть не может: указаны только ИМЕНА переменных,
+# а сами ключи лежат в ~/factory-data/.env с правами 600.
+
+slug: vk_demo
+
+vk:
+  group_id: 111222333            # закрытая группа «demo», два участника
+
+  # Два ключа, и они не взаимозаменяемы:
+  #   token_env        — ключ сообщества, умеет wall.post
+  #   upload_token_env — ключ пользователя, умеет загружать картинки
+  # Ни один не проходит цепочку целиком. Почему так — docs/ВК-как-это-работает.md
+  token_env: VK_TOKEN_GROUP
+  upload_token_env: VK_UPLOAD_TOKEN
+
+  api_version: "5.199"
+  schedule: ["19:30", "21:00"]
+  timezone: "Europe/Moscow"
+
+persona:
+  name: "Кристина"
+  voice_file: prompts/voice.md
+  style_examples: prompts/examples/
+
+llm:
+  provider: stub
+  model: "stub"
+  factcheck_model: "stub"
+
+image:
+  provider: stub
+  model: "stub"
+  inline_count: 3
+  cover_template: templates/red_frame.json
+  scene_style: "cinematic photo, overcast light, 35mm, shallow depth of field"
+
+publisher:
+  provider: vk                   # боевая публикация, не заглушка
+
+content:
+  post_structure: [hook, story, detail, question]
+  target_length: [900, 1400]
+  factcheck: strict
+
+review:
+  mode: auto                     # Telegram-бота ещё нет, ревью пропускается
+
+limits:
+  posts_per_day: 2
+  queue_buffer: 6
+  max_cost_per_post_usd: 0.40

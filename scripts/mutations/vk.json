@@ -69,6 +69,14 @@
     "молча глотать ошибку ВК вместо исключения": [
       "        if \"error\" in payload:",
       "        if False:"
+    ],
+    "не гасить обречённую уборку": [
+      "                if exc.code in (15, 27):\n                    self._cleanup_possible = False",
+      "                if False:\n                    self._cleanup_possible = False"
+    ],
+    "гасить уборку при любой ошибке, включая временную": [
+      "                if exc.code in (15, 27):",
+      "                if True:"
     ]
   }
 }
