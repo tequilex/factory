@@ -105,6 +105,8 @@ class LlmCfg(_Section):
 
     # Цены за миллион токенов в валюте провайдера. Необязательны: без них
     # система работает, но не может ответить, куда уходят деньги.
+    # Подпись валюты для отчётов. Сами цены ниже — в ней же.
+    currency: str = Field(default="₽", min_length=1, max_length=8)
     price_input_per_1m: float | None = Field(default=None, ge=0)
     price_output_per_1m: float | None = Field(default=None, ge=0)
     factcheck_price_input_per_1m: float | None = Field(default=None, ge=0)
@@ -171,7 +173,10 @@ class ReviewCfg(_Section):
 class LimitsCfg(_Section):
     posts_per_day: int = Field(default=2, ge=1)
     queue_buffer: int = Field(default=6, ge=1)
-    max_cost_per_post_usd: float = Field(default=0.40, gt=0)
+    # В валюте провайдера — той же, в которой заданы llm.price_*. Имя без
+    # «usd» намеренно: у реселлеров цены рублёвые, и доллар в названии уже
+    # однажды увёл отчёт о тратах на два порядка.
+    max_cost_per_post: float = Field(default=0.40, gt=0)
 
     @model_validator(mode="after")
     def _buffer_must_cover_a_day(self) -> LimitsCfg:

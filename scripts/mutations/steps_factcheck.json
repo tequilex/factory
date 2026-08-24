@@ -37,6 +37,18 @@
     "не учитывать стоимость вызова": [
       "    result = ctx.charge(\n        ctx.providers.factcheck.complete(system, ctx.post.body or \"\", schema=FactcheckResult)\n    )",
       "    result = ctx.providers.factcheck.complete(system, ctx.post.body or \"\", schema=FactcheckResult)"
+    ],
+    "при выключенном фактчеке всё равно дёргать модель": [
+      "        ctx.log.info(\"фактчек выключен в конфиге\", extra={\"post_id\": ctx.post.id})\n        return advanced(State.FACTCHECKED)",
+      "        ctx.log.info(\"фактчек выключен в конфиге\", extra={\"post_id\": ctx.post.id})\n        ctx.providers.factcheck.complete(SYSTEM_LIGHT, ctx.post.body or \"\")\n        return advanced(State.FACTCHECKED)"
+    ],
+    "игнорировать режим из конфига": [
+      "    with_search = mode == \"strict\" and ctx.project.llm.factcheck_web_search",
+      "    with_search = ctx.project.llm.factcheck_web_search"
+    ],
+    "игнорировать возможности модели": [
+      "    with_search = mode == \"strict\" and ctx.project.llm.factcheck_web_search",
+      "    with_search = mode == \"strict\""
     ]
   }
 }

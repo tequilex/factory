@@ -441,8 +441,24 @@ llm:
   provider: openai_compatible
   base_url_env: LLM_BASE_URL
   api_key_env: LLM_API_KEY
-  model: "gpt-4o"
-  factcheck_model: "gpt-4o"
+  model: "deepseek/deepseek-v3.2"
+  max_tokens: 4000
+  temperature: 1.0
+
+  # Фактчек — отдельная модель, и она обязана уметь искать в интернете.
+  # content.factcheck: strict без этого не пройдёт валидацию: проверено живьём,
+  # что модель без поиска одобряет выдумку и ссылается на несуществующий пункт
+  # приказа. Уверенное «ok» от такой модели хуже отсутствия проверки.
+  factcheck_model: "perplexity/sonar"
+  factcheck_web_search: true
+
+  # Цены за миллион токенов в валюте провайдера; currency — только подпись для
+  # отчётов. Без цен система работает, но колонка расходов остаётся пустой.
+  currency: "₽"
+  price_input_per_1m: 22.5
+  price_output_per_1m: 33.4
+  factcheck_price_input_per_1m: 107.8
+  factcheck_price_output_per_1m: 107.8
 
 image:
   provider: replicate
@@ -465,7 +481,7 @@ review:
 limits:
   posts_per_day: 2           # сколько ПУБЛИКУЕТСЯ в сутки
   queue_buffer: 6            # сколько постов держать в работе; правило: posts_per_day × 3
-  max_cost_per_post_usd: 0.40
+  max_cost_per_post: 0.40      # в валюте провайдера, той же, что llm.price_*
 ```
 
 Глобальные секреты — в `/data/.env`, права `600`. Валидация конфига через
@@ -639,7 +655,8 @@ Dockerfile, compose, CI-сборка, хартбит, бэкапы.
 - Хартбит: если основной тик не отработал успешно 2 часа — бот пишет владельцу
 - Ежедневная сводка в Telegram в 23:00: опубликовано, ошибок, потрачено $
 - Бэкап: `VACUUM INTO /data/backups/factory-{date}.db` раз в сутки, хранить 7
-- Если стоимость поста превысила `limits.max_cost_per_post_usd` — пост в
+- Если стоимость поста превысила `limits.max_cost_per_post` (в валюте
+  провайдера) — пост в
   `failed` с уведомлением, не жечь деньги молча
 
 ## Документация

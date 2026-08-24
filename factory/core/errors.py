@@ -41,7 +41,35 @@ class DbError(FactoryError):
 
 
 class ProviderError(FactoryError):
-    """An external provider (LLM, images, publisher) failed or is misconfigured."""
+    """An external provider (LLM, images, publisher) failed or is misconfigured.
+
+    Carries three optional facts that the retry machinery needs but that would be
+    lost if the provider only raised prose:
+
+    * ``status_code`` — so a 429 or a 502 is recognised as worth retrying. A
+      provider that swallows the code into a message turns a transient blip into
+      a burnt attempt;
+    * ``retry_after`` — seconds the server asked us to wait;
+    * ``cost`` — money already spent on a call that then failed. The model
+      charges for a reply that does not parse just as it charges for one that
+      does; leaving this out makes the spend report understate exactly when the
+      owner most needs it.
+    """
+
+    def __init__(
+        self,
+        what: str,
+        *,
+        why: str | None = None,
+        what_to_do: str | None = None,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+        cost: float | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.cost = cost
+        super().__init__(what, why=why, what_to_do=what_to_do)
 
 
 class LockError(FactoryError):

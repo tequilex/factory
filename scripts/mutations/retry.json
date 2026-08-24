@@ -3,8 +3,8 @@
   "tests": "tests/test_retry.py",
   "mutations": {
     "игнорировать заголовок Retry-After": [
-      "                        if requested is not None:\n                            delay = requested",
-      "                        if requested is not None:\n                            pass"
+      "                    if requested is not None:\n                        delay = requested",
+      "                    if requested is not None:\n                        pass"
     ],
     "убрать потолок паузы из Retry-After": [
       "    return min(seconds, MAX_RETRY_AFTER_SEC)",
@@ -31,7 +31,7 @@
       "MAX_ATTEMPTS = 5"
     ],
     "не записывать стоимость вызова": [
-      "                        cost_usd=_cost_of(result),",
+      "                        cost_usd=_spent_by(args) or cost_of(result),",
       "                        cost_usd=None,"
     ],
     "не наращивать паузу между попытками": [

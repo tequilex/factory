@@ -24,6 +24,7 @@ import httpx
 
 from factory.core import db
 from factory.core.clock import now_utc, to_iso
+from factory.core.errors import ProviderError
 from factory.core.logging import get_logger
 
 P = ParamSpec("P")
@@ -79,8 +80,12 @@ def cost_of(result: Any) -> float | None:
 _cost_of = cost_of  # прежнее имя, используется тестами
 
 
-def _retry_after_sec(exc: httpx.HTTPStatusError) -> float | None:
+def _retry_after_sec(exc: BaseException) -> float | None:
     """Seconds the server asked us to wait, if it said so and the value is sane."""
+    if isinstance(exc, ProviderError):
+        return None if exc.retry_after is None else min(exc.retry_after, MAX_RETRY_AFTER_SEC)
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
     raw = exc.response.headers.get("Retry-After")
     if not raw:
         return None
@@ -98,6 +103,11 @@ def _retry_after_sec(exc: httpx.HTTPStatusError) -> float | None:
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS
+    if isinstance(exc, ProviderError):
+        # Провайдер, переводящий ответ сервера в понятную человеку ошибку, обязан
+        # донести код. Иначе перегрузка на той стороне выглядит окончательным
+        # отказом и сжигает попытку поста вместо повтора через минуту.
+        return exc.status_code in RETRYABLE_STATUS
     return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
@@ -160,10 +170,9 @@ def tracked_call(
                         break
 
                     delay = BACKOFF_BASE_SEC ** (attempt - 1)
-                    if isinstance(exc, httpx.HTTPStatusError):
-                        requested = _retry_after_sec(exc)
-                        if requested is not None:
-                            delay = requested
+                    requested = _retry_after_sec(exc)
+                    if requested is not None:
+                        delay = requested
 
                     log.warning(
                         "попытка не удалась, повторяю",
@@ -198,6 +207,9 @@ def tracked_call(
                     ok=False,
                     duration_ms=duration_ms,
                     post_id=target_post,
+                    # Провал не значит «бесплатно»: модель берёт деньги и за
+                    # ответ, который не прошёл разбор.
+                    cost_usd=_spent_by(args) or getattr(last_exc, "cost", None),
                     error=f"{type(last_exc).__name__}: {last_exc}",
                 )
             assert last_exc is not None

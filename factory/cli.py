@@ -412,8 +412,10 @@ def post_show(post_id: int) -> None:
     conn.close()
 
     tz = None
+    currency = ""
     try:
-        tz = config_module.load_project(slug).vk.tz
+        loaded = config_module.load_project(slug)
+        tz, currency = loaded.vk.tz, loaded.llm.currency
     except FactoryError:
         # Показ поста не должен падать из-за битого конфига — время просто
         # останется в UTC.
@@ -441,7 +443,7 @@ def post_show(post_id: int) -> None:
         else:
             mark = "ФАЙЛ ПРОПАЛ"
         typer.echo(f"  {asset['kind']:7} {asset['position']}  {mark:24} {path or ''}")
-    typer.echo(f"Потрачено: ${cost:.4f}")
+    typer.echo(f"Потрачено: {cost:.4f} {currency}".rstrip())
     if post.external_id:
         typer.echo(f"Опубликован: {when(post.published_at)}, номер {post.external_id}")
     elif post.next_attempt_at:
@@ -531,6 +533,15 @@ def stats(
     conn = open_database()
     since = to_iso(now_utc() - timedelta(days=days))
 
+    # Без проекта считается сумма по всем группам, а валюты у них могут быть
+    # разные — тогда подпись не ставится вовсе, чтобы не соврать.
+    currency = ""
+    if slug:
+        try:
+            currency = config_module.load_project(slug).llm.currency
+        except FactoryError:
+            pass
+
     # Фильтр по проекту применяется ко ВСЕМ числам, а не только к разбивке по
     # состояниям: иначе «потрачено» показывает сумму по всем группам, и цифра
     # выглядит достоверной, будучи неверной.
@@ -586,7 +597,7 @@ def stats(
 
     typer.echo(f"\nОпубликовано:      {published}")
     typer.echo(f"Неудачных вызовов: {failures}")
-    typer.echo(f"Потрачено:         ${spent:.4f}")
+    typer.echo(f"Потрачено:         {spent:.4f} {currency}".rstrip())
     if rejections:
         typer.echo("Отклонено:")
         for row in rejections:

@@ -54,6 +54,7 @@ def _openai_compatible(config: ProjectConfig, *, factcheck: bool = False):
     return OpenAICompatibleLLM(
         base_url=resolve_secret(llm.base_url_env, context=f"адреса API для {role}"),
         api_key=resolve_secret(llm.api_key_env, context=f"модели {role}"),
+        key_env=llm.api_key_env,
         model=model,
         max_tokens=llm.max_tokens,
         temperature=llm.temperature,

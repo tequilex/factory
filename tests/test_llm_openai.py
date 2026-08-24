@@ -11,7 +11,13 @@ import httpx
 import pytest
 
 from factory.core.errors import ProviderError
-from factory.core.retry import _cost_of
+from factory.core.retry import (
+    MAX_RETRY_AFTER_SEC,
+    _cost_of,
+    _is_retryable,
+    _retry_after_sec,
+    tracked_call,
+)
 from factory.providers.base import PostDraft
 from factory.providers.llm.openai_compatible import OpenAICompatibleLLM
 
@@ -360,3 +366,122 @@ class TestKeyValidation:
         result = provider_with_key(recorder, monkeypatch, "sk-proj-AbC123").complete("s", "u")
 
         assert result
+
+
+class TestTransientFailuresAreRetried:
+    """Перегрузка на стороне провайдера — повод повторить, а не сдаться.
+
+    Провайдер переводит ответ сервера в понятную человеку ошибку. Если при этом
+    теряется код ответа, механизм повторов видит обычный отказ: пост тратит по
+    одной попытке за тик и через пять отказов уходит в failed, хотя всё это
+    время достаточно было подождать минуту.
+    """
+
+    def test_429_is_marked_retryable(self, monkeypatch):
+        recorder = Recorder(httpx.Response(429, text="rate limited"))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert _is_retryable(excinfo.value)
+        assert excinfo.value.status_code == 429
+
+    def test_server_errors_are_marked_retryable(self, monkeypatch):
+        recorder = Recorder(httpx.Response(503, text="upstream down"))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert _is_retryable(excinfo.value)
+
+    def test_bad_key_is_not_retried(self, monkeypatch):
+        """Повторять неверный ключ бессмысленно: он не исправится сам."""
+        recorder = Recorder(httpx.Response(401, text="unauthorized"))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert not _is_retryable(excinfo.value)
+
+    def test_retry_after_is_carried_through(self, monkeypatch):
+        recorder = Recorder(httpx.Response(429, headers={"Retry-After": "7"}, text=""))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert _retry_after_sec(excinfo.value) == 7.0
+
+    def test_absurd_retry_after_is_capped(self, monkeypatch):
+        """Просьбу подождать час нельзя выполнять в цикле сна с блокировкой тика."""
+        recorder = Recorder(httpx.Response(429, headers={"Retry-After": "3600"}, text=""))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert _retry_after_sec(excinfo.value) == MAX_RETRY_AFTER_SEC
+
+    def test_the_step_really_calls_the_model_again(self, monkeypatch):
+        """Проверка всей цепочки, а не только флага: попыток должно быть три."""
+        attempts = {"n": 0}
+
+        def flaky(request):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                return httpx.Response(429, headers={"Retry-After": "0"}, text="")
+            return reply(json.dumps(GOOD_POST, ensure_ascii=False))
+
+        recorder = Recorder(flaky)
+        llm = provider(recorder, monkeypatch)
+
+        @tracked_call("probe")
+        def call():
+            return llm.complete("s", "u", schema=PostDraft)
+
+        assert call().title == GOOD_POST["title"]
+        assert attempts["n"] == 3
+
+
+class TestPaidFailuresAreStillCounted:
+    """Модель берёт деньги и за ответ, который не разобрался."""
+
+    def test_unparseable_answer_carries_its_price(self, monkeypatch):
+        recorder = Recorder(reply("вообще не JSON", prompt=1_000_000, completion=0))
+        llm = provider(recorder, monkeypatch, price_input_per_1m=10.0, price_output_per_1m=20.0)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert excinfo.value.cost == 10.0
+
+    def test_answer_missing_fields_carries_its_price(self, monkeypatch):
+        recorder = Recorder(reply(json.dumps({"title": "нет остальных полей"}), prompt=1_000_000, completion=0))
+        llm = provider(recorder, monkeypatch, price_input_per_1m=10.0, price_output_per_1m=20.0)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert excinfo.value.cost == 10.0
+
+    def test_empty_answer_carries_its_price(self, monkeypatch):
+        """Самый обидный случай: заплачено за размышления, ответа нет."""
+        recorder = Recorder(reply("", prompt=0, completion=1_000_000))
+        llm = provider(recorder, monkeypatch, price_input_per_1m=10.0, price_output_per_1m=20.0)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert excinfo.value.cost == 20.0
+
+    def test_without_prices_nothing_is_invented(self, monkeypatch):
+        recorder = Recorder(reply("не JSON"))
+        llm = provider(recorder, monkeypatch)
+
+        with pytest.raises(ProviderError) as excinfo:
+            llm.complete("s", "u", schema=PostDraft)
+
+        assert excinfo.value.cost is None

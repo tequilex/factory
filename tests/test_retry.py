@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from factory.core import retry
+from factory.core.errors import ProviderError
 from factory.core.retry import record_run, tracked_call, with_cost
 from tests.conftest import insert_post, insert_project, insert_topic
 
@@ -77,6 +78,36 @@ class TestSuccess:
             return "готово"
 
         work()
+
+        assert runs(conn)[0]["cost_usd"] is None
+
+    def test_a_paid_failure_is_still_counted(self, conn):
+        """Провал не значит «бесплатно».
+
+        Модель берёт деньги и за ответ, который не прошёл разбор. Если такая
+        строка уходит в runs с пустой стоимостью, отчёт о тратах занижает их
+        ровно в том режиме, когда владельцу важнее всего их видеть — при модели,
+        которая плохо держит формат и падает по пять раз подряд.
+        """
+
+        @tracked_call("text_ready", conn=conn)
+        def work():
+            raise ProviderError("не разобрал ответ", cost=0.07)
+
+        with pytest.raises(ProviderError):
+            work()
+
+        (row,) = runs(conn)
+        assert row["ok"] == 0
+        assert row["cost_usd"] == pytest.approx(0.07)
+
+    def test_a_free_failure_records_no_price(self, conn):
+        @tracked_call("text_ready", conn=conn)
+        def work():
+            raise ProviderError("ключ не принят")
+
+        with pytest.raises(ProviderError):
+            work()
 
         assert runs(conn)[0]["cost_usd"] is None
 

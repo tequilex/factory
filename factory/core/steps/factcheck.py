@@ -60,7 +60,11 @@ def run(ctx: StepContext) -> StepResult:
         ctx.log.info("фактчек уже выполнен", extra={"post_id": ctx.post.id})
         return advanced(State.FACTCHECKED)
 
-    with_search = ctx.project.llm.factcheck_web_search
+    # Нужны оба условия. Только по возможностям модели — и «понизил до light
+    # ради экономии» ничего не меняет: промпт остаётся строгим, поиск
+    # оплачивается, владелец об этом не узнаёт. Только по режиму — и strict с
+    # моделью без поиска соврёт в заметках, что факты подтверждены.
+    with_search = mode == "strict" and ctx.project.llm.factcheck_web_search
     system = SYSTEM_STRICT if with_search else SYSTEM_LIGHT
 
     result = ctx.charge(

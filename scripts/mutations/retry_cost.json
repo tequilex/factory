@@ -1,0 +1,29 @@
+{
+  "module": "factory/core/retry.py",
+  "tests": [
+    "tests/test_retry.py",
+    "tests/test_llm_openai.py"
+  ],
+  "mutations": {
+    "не писать стоимость проваленного вызова": [
+      "                    cost_usd=_spent_by(args) or getattr(last_exc, \"cost\", None),",
+      "                    cost_usd=None,"
+    ],
+    "не считать ошибку провайдера поводом для повтора": [
+      "        return exc.status_code in RETRYABLE_STATUS",
+      "        return False"
+    ],
+    "повторять что угодно, включая неверный ключ": [
+      "        return exc.status_code in RETRYABLE_STATUS",
+      "        return True"
+    ],
+    "игнорировать просьбу подождать": [
+      "        return None if exc.retry_after is None else min(exc.retry_after, MAX_RETRY_AFTER_SEC)",
+      "        return None"
+    ],
+    "не ограничивать время ожидания": [
+      "        return None if exc.retry_after is None else min(exc.retry_after, MAX_RETRY_AFTER_SEC)",
+      "        return exc.retry_after"
+    ]
+  }
+}

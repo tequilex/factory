@@ -258,7 +258,7 @@ review:
 limits:
   posts_per_day: 2           # сколько ПУБЛИКУЕТСЯ в сутки
   queue_buffer: 6            # сколько постов держать в работе; правило: posts_per_day × 3
-  max_cost_per_post_usd: 0.40
+  max_cost_per_post: 0.40
 ```
 
 ---

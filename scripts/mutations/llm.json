@@ -43,8 +43,8 @@
       "    if False:\n        pass"
     ],
     "не проверять ключ на кириллицу": [
-      "    if key.isascii():\n        return key",
-      "    return key\n    if key.isascii():"
+      "    if key.isascii():",
+      "    if True:"
     ],
     "не считать стоимость": [
       "        return (\n            prompt * self.price_input_per_1m + completion * self.price_output_per_1m\n        ) / 1_000_000",
@@ -61,6 +61,22 @@
     "молча глотать ошибочный код ответа": [
       "        if response.status_code != 200:",
       "        if False:"
+    ],
+    "не доносить код ответа до механизма повторов": [
+      "                status_code=response.status_code,",
+      "                status_code=None,"
+    ],
+    "не доносить Retry-After": [
+      "                retry_after=_retry_after_header(response),",
+      "                retry_after=None,"
+    ],
+    "терять стоимость неразобранного ответа": [
+      "        spent = self._cost(usage)",
+      "        spent = None"
+    ],
+    "не доносить цену пустого ответа": [
+      "                cost=self._cost(usage),",
+      "                cost=None,"
     ]
   }
 }

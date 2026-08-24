@@ -312,3 +312,82 @@ def fake_asset():
         local_path = "/tmp/factory/1/cover.png"
 
     return Asset()
+
+
+class TestLiveProviderWiring:
+    """Сборка боевого провайдера из конфига.
+
+    Каждая проверка здесь закрывает молчаливую подмену: конфиг проходит
+    валидацию, владелец уверен, что фактчек идёт с поиском, а запрос уходит на
+    модель для текстов — и ни один тест не краснеет.
+    """
+
+    @pytest.fixture
+    def live_config(self, demo_project, monkeypatch):
+        monkeypatch.setenv("LLM_BASE_URL", "https://router.example/v1")
+        monkeypatch.setenv("ROUTER_KEY", "sk-test")
+        cfg = load_project("demo")
+        return cfg.model_copy(
+            update={
+                "llm": cfg.llm.model_copy(
+                    update={
+                        "provider": "openai_compatible",
+                        "base_url_env": "LLM_BASE_URL",
+                        "api_key_env": "ROUTER_KEY",
+                        "model": "vendor/writer",
+                        "factcheck_model": "vendor/searcher",
+                        "factcheck_web_search": True,
+                        "max_tokens": 1234,
+                        "temperature": 0.3,
+                        "price_input_per_1m": 10.0,
+                        "price_output_per_1m": 20.0,
+                        "factcheck_price_input_per_1m": 30.0,
+                        "factcheck_price_output_per_1m": 40.0,
+                    }
+                )
+            }
+        )
+
+    def test_factcheck_gets_its_own_model(self, live_config):
+        providers = registry.build_providers(live_config)
+
+        assert providers.llm.model == "vendor/writer"
+        assert providers.factcheck.model == "vendor/searcher"
+
+    def test_factcheck_falls_back_to_the_main_model_when_unset(self, live_config):
+        cfg = live_config.model_copy(
+            update={"llm": live_config.llm.model_copy(update={"factcheck_model": None})}
+        )
+
+        providers = registry.build_providers(cfg)
+
+        assert providers.factcheck.model == "vendor/writer"
+
+    def test_prices_do_not_get_swapped(self, live_config):
+        """Перепутанные местами цены дают правдоподобный, но неверный отчёт."""
+        providers = registry.build_providers(live_config)
+
+        assert providers.llm.price_input_per_1m == 10.0
+        assert providers.llm.price_output_per_1m == 20.0
+        assert providers.factcheck.price_input_per_1m == 30.0
+        assert providers.factcheck.price_output_per_1m == 40.0
+
+    def test_token_limit_and_temperature_come_from_the_config(self, live_config):
+        providers = registry.build_providers(live_config)
+
+        assert providers.llm.max_tokens == 1234
+        assert providers.llm.temperature == 0.3
+        assert providers.factcheck.max_tokens == 1234
+
+    def test_proxy_and_key_variable_names_reach_the_provider(self, live_config):
+        cfg = live_config.model_copy(
+            update={"llm": live_config.llm.model_copy(update={"proxy_env": "LLM_PROXY"})}
+        )
+
+        providers = registry.build_providers(cfg)
+
+        assert providers.llm.proxy_env == "LLM_PROXY"
+        # Имя переменной нужно, чтобы совет в ошибке 401 указывал на настоящую
+        # строку в файле секретов, а не на выдуманную. Имя здесь намеренно не
+        # совпадает с запасным значением в коде провайдера.
+        assert providers.llm.key_env == "ROUTER_KEY"

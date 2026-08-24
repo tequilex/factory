@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from factory.core import http
+from factory.core import http, paths
 from factory.core.errors import ProviderError
 from factory.core.logging import get_logger
 from factory.core.retry import with_cost
@@ -35,11 +35,11 @@ from factory.core.retry import with_cost
 log = get_logger(__name__)
 
 
-def _advice(status: int, body: str) -> str:
+def _advice(status: int, body: str, key_env: str) -> str:
     if status == 401:
         return (
-            "Ключ доступа не принят. Проверь строку LLM_API_KEY в файле секретов: "
-            "возможно, скопирован не целиком или отозван."
+            f"Ключ доступа не принят. Проверь строку {key_env} в файле "
+            f"{paths.env_file()}: возможно, скопирован не целиком или отозван."
         )
     if status == 402:
         return (
@@ -58,7 +58,7 @@ def _advice(status: int, body: str) -> str:
     return f"Ответ провайдера: {body[:200]}"
 
 
-def _checked_key(key: str) -> str:
+def _checked_key(key: str, key_env: str) -> str:
     """Ключ должен быть латиницей: HTTP-заголовки не переносят кириллицу.
 
     Ловушка для копипаста с русскоязычного сайта: русская «с» неотличима на вид
@@ -78,10 +78,22 @@ def _checked_key(key: str) -> str:
         ),
         what_to_do=(
             "Скопируй ключ заново из личного кабинета провайдера и вставь в "
-            "файл секретов. Проверить можно так: "
-            "grep LLM_API_KEY ~/factory-data/.env | LC_ALL=C grep -P '[^\\x00-\\x7F]'"
+            f"файл {paths.env_file()}. Проверить можно так: "
+            f"grep {key_env} {paths.env_file()} | LC_ALL=C grep -P '[^\\x00-\\x7F]'"
         ),
     )
+
+
+def _retry_after_header(response: httpx.Response) -> float | None:
+    """Сколько секунд сервер просит подождать, если он это сказал числом."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        seconds = float(raw.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _extract_json(text: str) -> str:
@@ -109,6 +121,7 @@ class OpenAICompatibleLLM:
         base_url: str,
         api_key: str,
         model: str,
+        key_env: str = "LLM_API_KEY",
         max_tokens: int = 4000,
         temperature: float = 1.0,
         price_input_per_1m: float | None = None,
@@ -116,7 +129,8 @@ class OpenAICompatibleLLM:
         proxy_env: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = _checked_key(api_key)
+        self.key_env = key_env
+        self.api_key = _checked_key(api_key, key_env)
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -177,7 +191,9 @@ class OpenAICompatibleLLM:
             raise ProviderError(
                 f"Модель не ответила: код {response.status_code}.",
                 why=f"Модель {self.model}, адрес {self.base_url}.",
-                what_to_do=_advice(response.status_code, response.text),
+                what_to_do=_advice(response.status_code, response.text, self.key_env),
+                status_code=response.status_code,
+                retry_after=_retry_after_header(response),
             )
 
         try:
@@ -217,6 +233,7 @@ class OpenAICompatibleLLM:
                     f"Увеличь llm.max_tokens в конфиге проекта — сейчас {self.max_tokens}. "
                     "Либо выбери модель без рассуждений."
                 ),
+                cost=self._cost(usage),
             )
 
         log.info(
@@ -234,6 +251,9 @@ class OpenAICompatibleLLM:
         return self._parse(content, schema, usage)
 
     def _parse(self, content: str, schema: type[BaseModel], usage: dict) -> BaseModel:
+        # Ответ уже оплачен. Если он не разберётся, цену всё равно надо донести
+        # до отчёта — иначе траты занижаются ровно там, где модель ломает формат.
+        spent = self._cost(usage)
         raw = _extract_json(content)
         try:
             parsed = json.loads(raw)
@@ -246,6 +266,7 @@ class OpenAICompatibleLLM:
                     "повторяется, модель плохо держит формат: смени её в "
                     "llm.model конфига проекта."
                 ),
+                cost=spent,
             ) from exc
 
         try:
@@ -261,9 +282,10 @@ class OpenAICompatibleLLM:
                     "Система повторит запрос. Если повторяется — смени модель "
                     "в llm.model конфига проекта."
                 ),
+                cost=spent,
             ) from exc
 
-        return with_cost(result, self._cost(usage))
+        return with_cost(result, spent)
 
 
 class _Text(str):

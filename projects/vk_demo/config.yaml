@@ -72,4 +72,4 @@ review:
 limits:
   posts_per_day: 2
   queue_buffer: 6
-  max_cost_per_post_usd: 0.40
+  max_cost_per_post: 0.40

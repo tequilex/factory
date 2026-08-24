@@ -1,26 +1,32 @@
 {
-  "module": "factory/providers/base.py",
-  "tests": "tests/test_providers_stub.py",
+  "module": "factory/providers/registry.py",
+  "tests": [
+    "tests/test_providers_stub.py"
+  ],
   "mutations": {
-    "не обрезать точку в конце заголовка": [
-        "        return value.rstrip().rstrip(\".\")",
-        "        return value"
+    "фактчек ходит на модель для текстов": [
+      "    model = (llm.factcheck_model or llm.model) if factcheck else llm.model",
+      "    model = llm.model"
     ],
-    "снять ограничение длины заголовка": [
-      "    title: str = Field(min_length=1, max_length=TITLE_MAX_LENGTH)",
-      "    title: str = Field(min_length=1)"
+    "перепутать цены текста и фактчека": [
+      "        (llm.factcheck_price_input_per_1m, llm.factcheck_price_output_per_1m)\n        if factcheck\n        else (llm.price_input_per_1m, llm.price_output_per_1m)",
+      "        (llm.price_input_per_1m, llm.price_output_per_1m)\n        if factcheck\n        else (llm.factcheck_price_input_per_1m, llm.factcheck_price_output_per_1m)"
     ],
-    "разрешить любой вердикт фактчека": [
-      "    verdict: str = Field(pattern=\"^(ok|fixed|uncertain)$\")",
-      "    verdict: str"
+    "не брать лимит токенов из конфига": [
+      "        max_tokens=llm.max_tokens,",
+      "        max_tokens=512,"
     ],
-    "изменить размер картинки": [
-      "IMAGE_HEIGHT = 1350",
-      "IMAGE_HEIGHT = 1080"
+    "не брать температуру из конфига": [
+      "        temperature=llm.temperature,",
+      "        temperature=1.0,"
     ],
-    "изменить лимит длины заголовка": [
-      "TITLE_MAX_LENGTH = 60",
-      "TITLE_MAX_LENGTH = 200"
+    "терять прокси": [
+      "        proxy_env=llm.proxy_env,",
+      "        proxy_env=None,"
+    ],
+    "терять имя переменной с ключом": [
+      "        key_env=llm.api_key_env,",
+      "        key_env=\"LLM_API_KEY\","
     ]
   }
 }

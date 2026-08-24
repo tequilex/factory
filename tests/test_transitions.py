@@ -107,6 +107,32 @@ class TestText:
         assert "Как выбрать шины на зиму" in user
         assert "900-1400" in user
 
+    def test_prompt_carries_the_style_examples(self, pipeline):
+        """Без примеров посты перестают попадать в стиль, и это молча.
+
+        Ошибки не будет: модель напишет складный текст не тем голосом, а
+        владелец увидит это уже в ревью и не поймёт, что сломалось.
+        """
+        from factory.core.steps.text import build_prompt
+
+        project = pipeline["context"](State.QUEUED).project
+        examples = project.style_examples()
+        assert examples, "у демо-проекта нет примеров — тест ничего не проверит"
+
+        system, _ = build_prompt(pipeline["context"](State.QUEUED))
+
+        for example in examples:
+            assert example.strip() in system
+
+    def test_prompt_carries_the_post_structure(self, pipeline):
+        from factory.core.steps.text import build_prompt
+
+        project = pipeline["context"](State.QUEUED).project
+        _, user = build_prompt(pipeline["context"](State.QUEUED))
+
+        for block in project.content.post_structure:
+            assert block in user
+
     def test_prompt_contains_no_text_meant_for_humans(self, pipeline):
         """Модель читает всё, что ей дали, как часть задания."""
         from factory.core.steps.text import build_prompt
@@ -158,14 +184,16 @@ class TestFactcheck:
             update={"content": project.content.model_copy(update={"factcheck": "off"})}
         )
         pipeline["advance_through"](State.QUEUED)
-        before = pipeline["providers"].llm.calls
+        # Считать надо модель ФАКТЧЕКА: обращения к модели текста тут не меняются
+        # никогда, и ассерт по ним истинен при любой реализации шага.
+        before = pipeline["providers"].factcheck.calls
 
         ctx = pipeline["context"](State.TEXT_READY)
         ctx.project = pipeline["project"]
         result = handler_for(State.TEXT_READY)(ctx)
 
         assert result.advanced
-        assert pipeline["providers"].llm.calls == before
+        assert pipeline["providers"].factcheck.calls == before
         assert post_row(pipeline["conn"], pipeline["post_id"])["factcheck_verdict"] is None
 
     def test_repeat_run_does_not_call_the_llm_again(self, pipeline):
@@ -306,6 +334,37 @@ class TestFactcheckHonesty:
         pipeline["run"](State.TEXT_READY)
 
         assert sent[0] == step.SYSTEM_LIGHT, "модели без поиска ушёл строгий промпт"
+
+    def test_light_mode_wins_over_a_search_capable_model(self, pipeline):
+        """«Понизил до light ради экономии» обязано что-то менять.
+
+        Если шаг смотрит только на возможности модели, понижение режима не
+        делает ничего: промпт остаётся строгим, поиск оплачивается полностью,
+        и владелец об этом не узнает.
+        """
+        from factory.core.steps import factcheck as step
+        from factory.providers.base import FactcheckResult
+
+        project = pipeline["project"]
+        cheap = project.model_copy(
+            update={
+                "content": project.content.model_copy(update={"factcheck": "light"}),
+                "llm": project.llm.model_copy(update={"factcheck_web_search": True}),
+            }
+        )
+        pipeline["advance_through"](State.QUEUED)
+        sent: list[str] = []
+
+        ctx = pipeline["context"](State.TEXT_READY)
+        ctx.project = cheap
+        ctx.providers.factcheck.complete = lambda s, u, *, schema=None: (
+            sent.append(s) or FactcheckResult(verdict="ok")
+        )
+        handler_for(State.TEXT_READY)(ctx)
+
+        assert sent[0] == step.SYSTEM_LIGHT
+        notes = post_row(pipeline["conn"], pipeline["post_id"])["factcheck_notes"]
+        assert "без поиска по источникам" in notes
 
     def test_with_search_the_strict_prompt_is_sent(self, pipeline):
         from factory.core.steps import factcheck as step
