@@ -245,7 +245,9 @@ class TestRollbackImages:
 
 
 class TestGuards:
-    @pytest.mark.parametrize("decision", list(Decision))
+    @pytest.mark.parametrize(
+        "decision", [d for d in Decision if d is not Decision.CANCEL]
+    )
     def test_a_second_press_changes_nothing(self, in_review, decision):
         """Двойное нажатие и нажатие на старое сообщение обязаны быть безвредны."""
         conn, post_id = in_review["conn"], in_review["post_id"]
@@ -298,7 +300,20 @@ class TestGuards:
 
         assert post_row(conn, post_id)["review_album_at"] is None
 
-    def test_the_stale_keyboard_reference_is_dropped(self, in_review):
+    def test_a_rollback_drops_the_stale_keyboard_reference(self, in_review):
+        """Пост уедет и вернётся новым сообщением — старое больше не его."""
+        conn, post_id = in_review["conn"], in_review["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET review_message_id = 777 WHERE id = ?", (post_id,)
+            )
+
+        apply(conn, post_id, Decision.TEXT)
+
+        assert post_row(conn, post_id)["review_message_id"] is None
+
+    def test_approval_keeps_the_message_to_cancel_from(self, in_review):
+        """С этого сообщения владелец отменяет публикацию, если передумал."""
         conn, post_id = in_review["conn"], in_review["post_id"]
         with db.write_transaction(conn):
             conn.execute(
@@ -307,7 +322,7 @@ class TestGuards:
 
         apply(conn, post_id, Decision.APPROVE)
 
-        assert post_row(conn, post_id)["review_message_id"] is None
+        assert post_row(conn, post_id)["review_message_id"] == 777
 
 
 class TestApprovalStreak:
@@ -870,3 +885,166 @@ class TestAlbumIsSentExactlyOnce:
             handler_for(State.COMPOSED)(ctx)
 
         assert len(notifier.albums) == 1, "картинки ушли повторно из-за сбоя текста"
+
+
+class TestCancel:
+    """Передумал после одобрения.
+
+    Пост одобрен, но до ближайшего слота может пройти полдня — и всё это время
+    он никуда не ушёл. Без отмены единственный путь назад — командная строка,
+    которой у владельца нет.
+    """
+
+    @pytest.fixture
+    def approved(self, in_review):
+        with db.write_transaction(in_review["conn"]):
+            in_review["conn"].execute(
+                "UPDATE posts SET review_message_id = 777 WHERE id = ?",
+                (in_review["post_id"],),
+            )
+        assert apply(in_review["conn"], in_review["post_id"], Decision.APPROVE)
+        return in_review
+
+    def test_the_post_goes_back_for_a_decision(self, approved):
+        conn, post_id = approved["conn"], approved["post_id"]
+
+        assert apply(conn, post_id, Decision.CANCEL) is True
+
+        assert post_row(conn, post_id)["state"] == State.IN_REVIEW
+
+    def test_the_same_message_keeps_the_buttons(self, approved):
+        """Отмена нажимается с того же сообщения, на нём же вернутся решения."""
+        conn, post_id = approved["conn"], approved["post_id"]
+
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert post_row(conn, post_id)["review_message_id"] == 777
+
+    def test_nothing_is_regenerated(self, approved):
+        """Передумал — не значит «переделай»: текст и картинки те же."""
+        conn, post_id = approved["conn"], approved["post_id"]
+        body = post_row(conn, post_id)["body"]
+        prompts = [row["prompt"] for row in assets(conn, post_id)]
+
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert post_row(conn, post_id)["body"] == body
+        assert [row["prompt"] for row in assets(conn, post_id)] == prompts
+
+    def test_it_is_not_a_rejection(self, approved):
+        """Правок не было — счёт одобрений подряд обнулять не за что."""
+        conn, post_id = approved["conn"], approved["post_id"]
+
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert rejections(conn, post_id) == []
+
+    def test_the_album_is_not_sent_again(self, approved):
+        conn, post_id = approved["conn"], approved["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET review_album_at = ? WHERE id = ?",
+                ("2026-01-01T00:00:00Z", post_id),
+            )
+
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert post_row(conn, post_id)["review_album_at"] is not None
+
+    def test_a_published_post_cannot_be_cancelled(self, approved):
+        """Удалять записи в группе система не умеет — обещать это нельзя."""
+        conn, post_id = approved["conn"], approved["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET external_id = ? WHERE id = ?", ("-1_5", post_id)
+            )
+
+        assert apply(conn, post_id, Decision.CANCEL) is False
+
+        assert post_row(conn, post_id)["state"] == State.APPROVED
+
+    def test_a_post_still_in_review_cannot_be_cancelled(self, in_review):
+        """Отменять нечего: решения ещё не было."""
+        assert apply(in_review["conn"], in_review["post_id"], Decision.CANCEL) is False
+
+    def test_a_second_cancel_changes_nothing(self, approved):
+        conn, post_id = approved["conn"], approved["post_id"]
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert apply(conn, post_id, Decision.CANCEL) is False
+
+    def test_it_can_be_approved_again(self, approved):
+        conn, post_id = approved["conn"], approved["post_id"]
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert apply(conn, post_id, Decision.APPROVE) is True
+        assert post_row(conn, post_id)["state"] == State.APPROVED
+
+
+class TestPublishClosesTheLoop:
+    """Пост вышел — владелец должен узнать об этом там же, где решал."""
+
+    @pytest.fixture
+    def approved(self, pipeline):
+        from factory.core.config import TelegramCfg
+
+        project = pipeline["project"]
+        pipeline["asking_project"] = project.model_copy(
+            update={
+                "review": project.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(provider="stub", chat_id=123456789, reviewers=[123456789]),
+            }
+        )
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY, State.COMPOSED,
+        )
+        with db.write_transaction(pipeline["conn"]):
+            pipeline["conn"].execute(
+                "UPDATE posts SET review_chat_id = 123456789, review_message_id = 777 WHERE id = ?",
+                (pipeline["post_id"],),
+            )
+        return pipeline
+
+    def publish(self, pipeline, monkeypatch):
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        ctx = pipeline["context"](State.APPROVED)
+        ctx.project = pipeline["asking_project"]
+        return handler_for(State.APPROVED)(ctx), ctx
+
+    def test_the_owner_gets_a_link(self, approved, monkeypatch):
+        result, ctx = self.publish(approved, monkeypatch)
+
+        assert result.advanced
+        (done,) = ctx.providers.notifier.finished
+        assert done["message_id"] == 777
+        assert "https://vk.com/wall" in done["text"]
+
+    def test_a_post_nobody_was_asked_about_stays_quiet(self, pipeline, monkeypatch):
+        """В режиме auto владельцу не писали — и сообщать некуда."""
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY, State.COMPOSED, State.IN_REVIEW,
+        )
+
+        result, ctx = pipeline["run"](State.APPROVED)
+
+        assert result.advanced
+        assert ctx.providers.notifier.finished == []
+
+    def test_a_broken_notification_does_not_undo_the_publication(self, approved, monkeypatch):
+        """Пост уже в группе: молчание бота это не повод считать шаг неудачным."""
+        from factory.core.errors import ProviderError
+
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        ctx = approved["context"](State.APPROVED)
+        ctx.project = approved["asking_project"]
+        ctx.providers.notifier.finish_review = lambda **kw: (_ for _ in ()).throw(
+            ProviderError("Telegram недоступен")
+        )
+
+        result = handler_for(State.APPROVED)(ctx)
+
+        assert result.advanced
+        assert post_row(approved["conn"], approved["post_id"])["external_id"]

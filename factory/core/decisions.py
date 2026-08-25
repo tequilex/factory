@@ -48,6 +48,9 @@ class Decision(StrEnum):
     """Что владелец нажал. Значения уходят в callback_data — менять нельзя."""
 
     APPROVE = "ok"
+    #: Передумал, пока пост ещё не вышел. Не отказ: править нечего, просто
+    #: возврат к решению.
+    CANCEL = "back"
     IMAGES = "img"
     SCENES = "scn"
     TEXT = "txt"
@@ -58,6 +61,7 @@ class Decision(StrEnum):
 #: ``None`` в причине — решение не является отказом.
 TARGET_STATE: dict[Decision, State] = {
     Decision.APPROVE: State.APPROVED,
+    Decision.CANCEL: State.IN_REVIEW,
     Decision.IMAGES: State.PROMPTS_READY,
     Decision.SCENES: State.FACTCHECKED,
     Decision.TEXT: State.QUEUED,
@@ -66,6 +70,7 @@ TARGET_STATE: dict[Decision, State] = {
 
 REJECTION_REASON: dict[Decision, RejectionReason | None] = {
     Decision.APPROVE: None,
+    Decision.CANCEL: None,
     Decision.IMAGES: RejectionReason.IMAGES,
     Decision.SCENES: RejectionReason.SCENES,
     Decision.TEXT: RejectionReason.TEXT,
@@ -74,6 +79,7 @@ REJECTION_REASON: dict[Decision, RejectionReason | None] = {
 
 LABEL: dict[Decision, str] = {
     Decision.APPROVE: "Опубликовать",
+    Decision.CANCEL: "Отменить публикацию",
     Decision.IMAGES: "Картинки заново",
     Decision.SCENES: "Другие сцены",
     Decision.TEXT: "Текст заново",
@@ -119,6 +125,18 @@ def _clear_for(conn: sqlite3.Connection, decision: Decision, post_id: int) -> No
             )
 
 
+#: Из какого состояния решение вообще применимо. Одобрение и откаты — только
+#: пока пост у владельца; отмена — только пока он одобрен и ещё не вышел.
+ALLOWED_FROM: dict[Decision, State] = {
+    Decision.APPROVE: State.IN_REVIEW,
+    Decision.IMAGES: State.IN_REVIEW,
+    Decision.SCENES: State.IN_REVIEW,
+    Decision.TEXT: State.IN_REVIEW,
+    Decision.TRASH: State.IN_REVIEW,
+    Decision.CANCEL: State.APPROVED,
+}
+
+
 def apply(
     conn: sqlite3.Connection,
     post_id: int,
@@ -137,9 +155,12 @@ def apply(
     stamp = to_iso(now_utc())
 
     with db.write_transaction(conn):
+        # Отмена дополнительно требует, чтобы пост ещё не вышел: успели
+        # опубликовать — отменять уже нечего, надо удалять в самой группе.
         row = conn.execute(
-            "SELECT id, topic_id FROM posts WHERE id = ? AND state = ?",
-            (post_id, State.IN_REVIEW),
+            "SELECT id, topic_id FROM posts WHERE id = ? AND state = ? "
+            "AND (? != ? OR external_id IS NULL)",
+            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),
         ).fetchone()
         if row is None:
             return False
@@ -163,13 +184,23 @@ def apply(
         # Сбрасываются и счётчик попыток, и время следующей: пост возвращается
         # в работу немедленно и с чистым бюджетом, а не с наследством от того,
         # что владелец забраковал. Сообщение с кнопками больше не актуально.
-        conn.execute(
-            "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
-            "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
-            "review_album_message_id = NULL, "
-            "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
-            (target, stamp, by, stamp, post_id),
-        )
+        if decision in (Decision.APPROVE, Decision.CANCEL):
+            # Сообщение остаётся тем же: с него владелец отменяет публикацию,
+            # если передумал, и на нём же появится ссылка на вышедший пост.
+            conn.execute(
+                "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
+                "next_attempt_at = NULL, decided_at = ?, decided_by = ?, updated_at = ? "
+                "WHERE id = ?",
+                (target, stamp, by, stamp, post_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
+                "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
+                "review_album_message_id = NULL, "
+                "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
+                (target, stamp, by, stamp, post_id),
+            )
 
     log.info(
         "решение владельца применено",

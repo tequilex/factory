@@ -53,9 +53,12 @@ KEYBOARD_ROWS: tuple[tuple[Decision, ...], ...] = (
     (Decision.SCENES, Decision.TEXT),
     (Decision.TRASH,),
 )
+# Decision.CANCEL сюда не входит: он появляется отдельной кнопкой уже после
+# одобрения, когда остальные решения неприменимы.
 
 ICON: dict[Decision, str] = {
     Decision.APPROVE: "✅",
+    Decision.CANCEL: "↩️",
     Decision.IMAGES: "🔄",
     Decision.SCENES: "🎲",
     Decision.TEXT: "✏️",
@@ -80,6 +83,25 @@ def review_keyboard(post_id: int) -> dict:
                 for item in row
             ]
             for row in KEYBOARD_ROWS
+        ]
+    }
+
+
+def cancel_keyboard(post_id: int) -> dict:
+    """Единственная кнопка под одобренным постом — «передумал».
+
+    Убирать клавиатуру совсем нельзя: пост одобрен, но ещё не вышел, и до
+    ближайшего слота владелец вправе передумать. Без кнопки единственный путь
+    назад — командная строка, которой у него нет.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": f"{ICON[Decision.CANCEL]} {LABEL[Decision.CANCEL]}",
+                    "callback_data": f"r:{post_id}:{Decision.CANCEL.value}",
+                }
+            ]
         ]
     }
 
@@ -279,6 +301,28 @@ class TelegramNotifier:
 
         message = self._call("sendMessage", data=data)
         return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
+
+    def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
+        """Пост вышел: снять кнопку отмены и дать ссылку.
+
+        Кнопка «Отменить публикацию» под уже вышедшим постом — обещание,
+        которого система выполнить не может: удалять записи в группе она не
+        умеет и не должна.
+        """
+        self._call(
+            "editMessageReplyMarkup",
+            data={"chat_id": chat_id, "message_id": message_id, "reply_markup": _json({})},
+        )
+        self._call(
+            "sendMessage",
+            data={
+                "chat_id": chat_id,
+                "text": _cut(text),
+                "reply_to_message_id": message_id,
+                "allow_sending_without_reply": True,
+                "disable_web_page_preview": True,
+            },
+        )
 
     def alert(self, *, chat_id: int, text: str) -> None:
         self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})

@@ -34,7 +34,13 @@ from factory.core.errors import ConfigError, FactoryError
 from factory.core.logging import get_logger
 from factory.core.models import State
 from factory.core.steps.publish import next_slot_start
-from factory.providers.notifiers.telegram import ICON, extract_vk_token, parse_callback
+from factory.providers.notifiers.telegram import (
+    ICON,
+    cancel_keyboard,
+    extract_vk_token,
+    parse_callback,
+    review_keyboard,
+)
 
 log = get_logger(__name__)
 
@@ -53,6 +59,15 @@ START_TEXT = (
 
 NOT_YOURS = "Эта кнопка не для вас."
 ALREADY_DONE = "По этому посту решение уже принято."
+ALREADY_OUT = "Пост уже вышел в группу — отменить нельзя. Удалить его можно только в самой группе."
+
+
+def _refusal(conn: sqlite3.Connection, post_id: int, decision: Decision) -> str:
+    """Почему нажатие не сработало. Общее «уже принято» тут вводит в заблуждение."""
+    row = conn.execute("SELECT external_id FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if decision is Decision.CANCEL and row is not None and row["external_id"]:
+        return ALREADY_OUT
+    return ALREADY_DONE
 
 
 def _projects() -> dict[str, ProjectConfig]:
@@ -153,12 +168,13 @@ def build_dispatcher(
             return
 
         if not apply(conn, post_id, decision, by=query.from_user.id):
-            await query.answer(ALREADY_DONE, show_alert=True)
-            await _drop_keyboard(query)
+            await query.answer(
+                _refusal(conn, post_id, decision), show_alert=True
+            )
             return
 
         await query.answer(f"{ICON[decision]} {LABEL[decision]}")
-        await _drop_keyboard(query)
+        await _replace_keyboard(query, decision, post_id)
         await _confirm(query, decision, conn, current().get(slug or ""), slug)
 
     @dispatcher.errors()
@@ -270,8 +286,40 @@ async def _forget(message: Message) -> None:
         log.info("не удалось удалить сообщение с ключом", extra={"reason": str(exc)})
 
 
+async def _replace_keyboard(query: CallbackQuery, decision: Decision, post_id: int) -> None:
+    """Поменять клавиатуру под тем, что теперь можно сделать.
+
+    Одобрили — остаётся одна кнопка «Отменить публикацию»: пост ещё не вышел, и
+    до ближайшего слота владелец вправе передумать. Отменили — возвращаются все
+    решения. Откат или мусор — кнопок нет: пост уедет и вернётся новым
+    сообщением.
+    """
+    markup = None
+    if decision is Decision.APPROVE:
+        markup = _as_markup(cancel_keyboard(post_id))
+    elif decision is Decision.CANCEL:
+        markup = _as_markup(review_keyboard(post_id))
+
+    try:
+        await query.message.edit_reply_markup(reply_markup=markup)
+    except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика
+        log.info("не удалось поменять кнопки", extra={"reason": str(exc)})
+
+
+def _as_markup(keyboard: dict):
+    """Словарь в формате Bot API — в объект aiogram."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(**button) for button in row]
+            for row in keyboard["inline_keyboard"]
+        ]
+    )
+
+
 async def _drop_keyboard(query: CallbackQuery) -> None:
-    """Снять кнопки: живая клавиатура под решённым постом зовёт нажать снова."""
+    """Снять кнопки совсем: решение уже принято, нажимать больше нечего."""
     try:
         await query.message.edit_reply_markup(reply_markup=None)
     except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика
@@ -318,6 +366,7 @@ async def _confirm(
 ) -> None:
     text = {
         Decision.APPROVE: _approval_text(conn, project, slug),
+        Decision.CANCEL: "↩️ Публикация отменена, пост снова ждёт вашего решения.",
         Decision.IMAGES: "🔄 Картинки будут перерисованы, текст сохранён.",
         Decision.SCENES: "🎲 Сцены придумаются заново, текст сохранён.",
         Decision.TEXT: "✏️ Текст будет написан заново, тема остаётся.",

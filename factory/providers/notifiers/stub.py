@@ -22,6 +22,7 @@ class StubNotifier:
     name: str = "stub"
     sent: list[dict] = field(default_factory=list)
     albums: list[dict] = field(default_factory=list)
+    finished: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     _next_message_id: int = 1000
 
@@ -57,6 +58,9 @@ class StubNotifier:
         )
         log.info("ревью-сообщение не отправлено: заглушка", extra={"post_id": post_id})
         return ReviewMessage(chat_id=chat_id, message_id=self._next_message_id)
+
+    def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
+        self.finished.append({"chat_id": chat_id, "message_id": message_id, "text": text})
 
     def alert(self, *, chat_id: int, text: str) -> None:
         self.alerts.append(text)

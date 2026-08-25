@@ -28,6 +28,7 @@ class FakeMessage:
     answered: list[str] = field(default_factory=list)
     markup_edits: int = 0
     edit_fails: bool = False
+    last_markup: object = None
 
     async def answer(self, text: str) -> None:
         self.answered.append(text)
@@ -36,6 +37,7 @@ class FakeMessage:
         if self.edit_fails:
             raise RuntimeError("сообщение слишком старое")
         self.markup_edits += 1
+        self.last_markup = reply_markup
 
 
 @dataclass
@@ -389,3 +391,52 @@ class TestApprovalRespectsTheScheduleSwitch:
 
         assert "расписание отключено" in text
         assert "19:30" not in text
+
+
+class TestCancelButton:
+    """Кнопки не должны исчезать бесследно: пост одобрен, но ещё не вышел."""
+
+    def test_approving_leaves_a_way_back(self, bot_env):
+        query = bot_env["press"](f"r:{bot_env['post_id']}:ok")
+
+        markup = query.message.last_markup
+        assert markup is not None, "кнопки убрали совсем — передумать нечем"
+        buttons = [b for row in markup.inline_keyboard for b in row]
+        assert len(buttons) == 1
+        assert "Отменить" in buttons[0].text
+
+    def test_cancelling_brings_all_the_decisions_back(self, bot_env):
+        bot_env["press"](f"r:{bot_env['post_id']}:ok")
+
+        query = bot_env["press"](f"r:{bot_env['post_id']}:back")
+
+        assert state_of(bot_env) == State.IN_REVIEW
+        buttons = [b for row in query.message.last_markup.inline_keyboard for b in row]
+        assert len(buttons) == 5
+
+    def test_the_owner_is_told_the_post_is_back(self, bot_env):
+        bot_env["press"](f"r:{bot_env['post_id']}:ok")
+
+        query = bot_env["press"](f"r:{bot_env['post_id']}:back")
+
+        assert "отменена" in query.message.answered[-1]
+
+    def test_a_rollback_leaves_no_buttons(self, bot_env):
+        """Пост уедет переделываться и вернётся новым сообщением."""
+        query = bot_env["press"](f"r:{bot_env['post_id']}:txt")
+
+        assert query.message.last_markup is None
+
+    def test_cancelling_a_published_post_says_why_not(self, bot_env):
+        """Общее «решение уже принято» тут вводит в заблуждение."""
+        bot_env["press"](f"r:{bot_env['post_id']}:ok")
+        with db.write_transaction(bot_env["conn"]):
+            bot_env["conn"].execute(
+                "UPDATE posts SET external_id = ?, state = ? WHERE id = ?",
+                ("-1_5", State.PUBLISHED, bot_env["post_id"]),
+            )
+
+        query = bot_env["press"](f"r:{bot_env['post_id']}:back")
+
+        assert "уже вышел" in query.said
+        assert "в самой группе" in query.said

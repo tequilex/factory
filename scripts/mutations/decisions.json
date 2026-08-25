@@ -37,8 +37,8 @@
       "        if True:"
     ],
     "убрать защиту от второго нажатия": [
-      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ?\",\n            (post_id, State.IN_REVIEW),",
-      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND ? IS NOT NULL\",\n            (post_id, State.IN_REVIEW),"
+      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ? \"",
+      "            \"SELECT id, topic_id FROM posts WHERE id = ? AND ? IS NOT NULL \""
     ],
     "не записывать отказ в rejections": [
       "        if reason is not None:",
@@ -49,8 +49,8 @@
       "        if True:"
     ],
     "не сбрасывать счётчик попыток": [
-      "            \"UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, \"",
-      "            \"UPDATE posts SET state = ?, retry_count = retry_count, last_error = NULL, \""
+      "\"UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, \"\n                \"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
+      "\"UPDATE posts SET state = ?, retry_count = retry_count, last_error = NULL, \"\n                \"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \""
     ],
     "оставить ссылку на старое сообщение с кнопками": [
       "\"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
@@ -83,6 +83,26 @@
     "снимок делать после очистки данных": [
       "        if reason is not None:\n            conn.execute(\n                \"INSERT INTO rejections (post_id, reason, snapshot, created_at) \"\n                \"VALUES (?, ?, ?, ?)\",\n                (post_id, reason, _snapshot(conn, post_id), stamp),\n            )\n\n        _clear_for(conn, decision, post_id)",
       "        _clear_for(conn, decision, post_id)\n\n        if reason is not None:\n            conn.execute(\n                \"INSERT INTO rejections (post_id, reason, snapshot, created_at) \"\n                \"VALUES (?, ?, ?, ?)\",\n                (post_id, reason, _snapshot(conn, post_id), stamp),\n            )"
+    ],
+    "отменять уже вышедший пост": [
+      "            \"AND (? != ? OR external_id IS NULL)\",",
+      "            \"AND (? != ? OR 1 = 1)\","
+    ],
+    "разрешить отмену из любого состояния": [
+      "            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),",
+      "            (post_id, State.IN_REVIEW, decision, Decision.CANCEL),"
+    ],
+    "терять сообщение при одобрении": [
+      "        if decision in (Decision.APPROVE, Decision.CANCEL):",
+      "        if False:"
+    ],
+    "сохранять сообщение и при откате": [
+      "        if decision in (Decision.APPROVE, Decision.CANCEL):",
+      "        if True:"
+    ],
+    "считать отмену отказом": [
+      "    Decision.CANCEL: None,",
+      "    Decision.CANCEL: RejectionReason.TRASH,"
     ]
   }
 }

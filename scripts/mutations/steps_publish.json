@@ -1,6 +1,6 @@
 {
   "module": "factory/core/steps/publish.py",
-  "tests": "tests/test_transitions.py tests/test_publish_limit.py tests/test_review_bot.py",
+  "tests": "tests/test_transitions.py tests/test_publish_limit.py tests/test_review_bot.py tests/test_decisions.py",
   "mutations": {
     "убрать проверку external_id — допустить дубль публикации": [
       "    if ctx.post.external_id:",
@@ -77,6 +77,18 @@
     "не переходить на завтрашний слот": [
       "        for offset in (0, 1)",
       "        for offset in (0,)"
+    ],
+    "не сообщать о публикации": [
+      "    _tell_the_owner(ctx, external_id)\n    return advanced(State.PUBLISHED)",
+      "    return advanced(State.PUBLISHED)"
+    ],
+    "дать ссылку не на ту запись": [
+      "    return f\"https://vk.com/wall{external_id}\"",
+      "    return \"https://vk.com/wall\""
+    ],
+    "ронять публикацию из-за молчания бота": [
+      "    except Exception as exc:  # noqa: BLE001 — пост уже вышел, это уведомление",
+      "    except ValueError as exc:"
     ]
   }
 }

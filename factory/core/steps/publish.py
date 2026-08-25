@@ -229,7 +229,35 @@ def run(ctx: StepContext) -> StepResult:
         "пост опубликован",
         extra={"post_id": ctx.post.id, "external_id": external_id},
     )
+    _tell_the_owner(ctx, external_id)
     return advanced(State.PUBLISHED)
+
+
+def post_url(external_id: str) -> str:
+    """Ссылка на запись в группе. ``external_id`` — это ``{-group_id}_{post_id}``."""
+    return f"https://vk.com/wall{external_id}"
+
+
+def _tell_the_owner(ctx: StepContext, external_id: str) -> None:
+    """Сказать в Telegram, что пост вышел, и снять кнопку отмены.
+
+    Отменять больше нечего: удалять записи в группе система не умеет и не
+    должна. Оставить кнопку значило бы обещать то, чего она не сделает.
+    """
+    if ctx.project.telegram is None or not ctx.post.review_message_id:
+        return
+
+    try:
+        ctx.providers.notifier.finish_review(
+            chat_id=ctx.post.review_chat_id or ctx.project.telegram.chat_id,
+            message_id=ctx.post.review_message_id,
+            text=f"📣 Опубликовано: {post_url(external_id)}",
+        )
+    except Exception as exc:  # noqa: BLE001 — пост уже вышел, это уведомление
+        ctx.log.warning(
+            "не удалось сообщить о публикации",
+            extra={"post_id": ctx.post.id, "reason": str(exc)},
+        )
 
 
 def next_slot_start(project: ProjectConfig, moment: datetime) -> datetime | None:

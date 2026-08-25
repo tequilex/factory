@@ -283,11 +283,17 @@ class TestErrors:
 
 
 class TestKeyboard:
-    def test_every_decision_has_a_button(self, ):
+    def test_every_review_decision_has_a_button(self):
+        """Отмена сюда не входит: она появляется уже после одобрения."""
         keyboard = review_keyboard(7)
         flat = [button for row in keyboard["inline_keyboard"] for button in row]
 
-        assert len(flat) == len(list(Decision))
+        expected = [d for d in Decision if d is not Decision.CANCEL]
+        assert len(flat) == len(expected)
+        assert all(
+            any(d.value == button["callback_data"].rsplit(":", 1)[-1] for button in flat)
+            for d in expected
+        )
 
     def test_a_button_carries_the_post_number(self):
         """Бот перезапускается, а сообщение живёт в переписке неделями.

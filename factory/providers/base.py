@@ -107,6 +107,10 @@ class Notifier(Protocol):
         """
         ...
 
+    def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
+        """Пост вышел: снять кнопку отмены и показать ссылку."""
+        ...
+
     def alert(self, *, chat_id: int, text: str) -> None: ...
 
 

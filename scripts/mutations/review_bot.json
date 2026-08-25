@@ -22,23 +22,23 @@
       "        if parsed is None:\n            parsed = (1, Decision.APPROVE)"
     ],
     "не сообщать, что решение уже принято": [
-      "        if not apply(conn, post_id, decision, by=query.from_user.id):\n            await query.answer(ALREADY_DONE, show_alert=True)",
-      "        if not apply(conn, post_id, decision, by=query.from_user.id):\n            await query.answer(\"\")"
+      "            await query.answer(\n                _refusal(conn, post_id, decision), show_alert=True\n            )",
+      "            await query.answer(\"\")"
     ],
     "не записывать, кто нажал": [
       "        if not apply(conn, post_id, decision, by=query.from_user.id):",
       "        if not apply(conn, post_id, decision, by=None):"
     ],
     "оставить кнопки после решения": [
-      "        await _drop_keyboard(query)\n        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)",
-      "        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)"
+      "        await _replace_keyboard(query, decision, post_id)",
+      "        pass"
     ],
     "не объяснять, что будет дальше": [
       "        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)",
       "        pass"
     ],
     "ронять решение из-за неубранных кнопок": [
-      "    except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика\n        log.info(\"не удалось убрать кнопки\", extra={\"reason\": str(exc)})",
+      "    except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика\n        log.info(\"не удалось поменять кнопки\", extra={\"reason\": str(exc)})",
       "    except Exception as exc:  # noqa: BLE001\n        raise"
     ],
     "показывать статус чужих проектов": [
@@ -72,6 +72,22 @@
     "молчать про непонятный ответ": [
       "    if post_id is None:\n        await message.answer(\n            \"Не понял, к какому посту это относится. Ответьте на сообщение с \"\n            \"постом — тем, под которым кнопки.\"\n        )\n        return",
       "    if post_id is None:\n        return"
+    ],
+    "убирать кнопки совсем после одобрения": [
+      "    if decision is Decision.APPROVE:\n        markup = _as_markup(cancel_keyboard(post_id))",
+      "    if False:\n        markup = _as_markup(cancel_keyboard(post_id))"
+    ],
+    "не возвращать кнопки после отмены": [
+      "    elif decision is Decision.CANCEL:\n        markup = _as_markup(review_keyboard(post_id))",
+      "    elif False:\n        markup = _as_markup(review_keyboard(post_id))"
+    ],
+    "оставлять кнопки после отката": [
+      "    markup = None\n    if decision is Decision.APPROVE:",
+      "    markup = _as_markup(review_keyboard(post_id))\n    if decision is Decision.APPROVE:"
+    ],
+    "путать вышедший пост с решённым": [
+      "    if decision is Decision.CANCEL and row is not None and row[\"external_id\"]:",
+      "    if False:"
     ]
   }
 }
