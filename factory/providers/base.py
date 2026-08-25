@@ -98,6 +98,7 @@ class Notifier(Protocol):
     def send_review_text(
         self, *, chat_id: int, project: str, title: str, body: str,
         warning: str | None, post_id: int, reply_to: int | None = None,
+        version: int = 1, total: int = 1,
     ) -> ReviewMessage:
         """Текст с кнопками, ответом на альбом.
 

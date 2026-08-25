@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from factory.core import db
 from factory.core.clock import now_utc, to_iso
+from factory.core import versions
 from factory.core.decisions import approvals_in_a_row
 from factory.core.models import State
 from factory.core.retry import tracked_call
@@ -133,6 +134,11 @@ def send_for_review(ctx: StepContext) -> StepResult:
         ctx.log.info("пост уже отправлен на ревью", extra={"post_id": ctx.post.id})
         return advanced(State.IN_REVIEW)
 
+    # Вариант фиксируется здесь: это первый момент, когда он полон и его можно
+    # показать человеку. Раньше — нечего сохранять, позже — уже не к чему
+    # вернуться.
+    versions.record(ctx.conn, ctx.post)
+
     telegram = ctx.project.telegram
     album_id = ctx.post.review_album_message_id
 
@@ -147,6 +153,8 @@ def send_for_review(ctx: StepContext) -> StepResult:
         warning=_warning(ctx),
         post_id=ctx.post.id,
         reply_to=album_id,
+        version=ctx.post.version,
+        total=versions.count(ctx.conn, ctx.post.id),
     )
 
     with db.write_transaction(ctx.conn):

@@ -43,6 +43,8 @@ class StubNotifier:
         warning: str | None,
         post_id: int,
         reply_to: int | None = None,
+        version: int = 1,
+        total: int = 1,
     ) -> ReviewMessage:
         self._next_message_id += 1
         self.sent.append(
@@ -54,6 +56,8 @@ class StubNotifier:
                 "warning": warning,
                 "post_id": post_id,
                 "reply_to": reply_to,
+                "version": version,
+                "total": total,
             }
         )
         log.info("ревью-сообщение не отправлено: заглушка", extra={"post_id": post_id})

@@ -290,10 +290,23 @@ class TestKeyboard:
 
         expected = [d for d in Decision if d is not Decision.CANCEL]
         assert len(flat) == len(expected)
-        assert all(
-            any(d.value == button["callback_data"].rsplit(":", 1)[-1] for button in flat)
-            for d in expected
-        )
+        carried = {button["callback_data"].split(":")[2] for button in flat}
+        assert carried == {d.value for d in expected}
+
+    def test_a_button_carries_the_variant(self):
+        """Одобряют тот вариант, под которым нажали, а не последний сделанный."""
+        keyboard = review_keyboard(7, 3)
+        flat = [button for row in keyboard["inline_keyboard"] for button in row]
+
+        assert all(button["callback_data"].endswith(":3") for button in flat)
+
+    def test_the_approve_button_says_which_one(self):
+        """«Опубликовать этот» на единственном варианте звучит как будто есть другие."""
+        alone = review_keyboard(7, 1)["inline_keyboard"][0][0]["text"]
+        among = review_keyboard(7, 2)["inline_keyboard"][0][0]["text"]
+
+        assert "этот" not in alone
+        assert "этот" in among
 
     def test_a_button_carries_the_post_number(self):
         """Бот перезапускается, а сообщение живёт в переписке неделями.
@@ -315,9 +328,17 @@ class TestKeyboard:
 
     @pytest.mark.parametrize("decision", list(Decision))
     def test_every_button_parses_back(self, decision):
-        assert parse_callback(f"r:7:{decision.value}") == (7, decision)
+        assert parse_callback(f"r:7:{decision.value}:2") == (7, decision, 2)
 
-    @pytest.mark.parametrize("data", ["", "мусор", "r:7", "r:семь:ok", "r:7:неизвестно", "x:7:ok"])
+    @pytest.mark.parametrize("decision", list(Decision))
+    def test_buttons_sent_before_variants_still_work(self, decision):
+        """Сообщения живут в переписке неделями и переживают обновления."""
+        assert parse_callback(f"r:7:{decision.value}") == (7, decision, None)
+
+    @pytest.mark.parametrize(
+        "data",
+        ["", "мусор", "r:7", "r:семь:ok", "r:7:неизвестно", "x:7:ok", "r:7:ok:два", "r:7:ok:1:2"],
+    )
     def test_foreign_or_broken_data_is_refused(self, data):
         """Чужая кнопка не должна применяться наугад."""
         assert parse_callback(data) is None

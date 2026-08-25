@@ -30,7 +30,7 @@
       "        if not apply(conn, post_id, decision, by=None):"
     ],
     "оставить кнопки после решения": [
-      "        await _replace_keyboard(query, decision, post_id)",
+      "        await _replace_keyboard(query, decision, post_id, version or 1)",
       "        pass"
     ],
     "не объяснять, что будет дальше": [
@@ -78,8 +78,8 @@
       "    if False:\n        markup = _as_markup(cancel_keyboard(post_id))"
     ],
     "не возвращать кнопки после отмены": [
-      "    elif decision is Decision.CANCEL:\n        markup = _as_markup(review_keyboard(post_id))",
-      "    elif False:\n        markup = _as_markup(review_keyboard(post_id))"
+      "    elif decision is Decision.CANCEL:\n        markup = _as_markup(review_keyboard(post_id, version))",
+      "    elif False:\n        markup = _as_markup(review_keyboard(post_id, version))"
     ],
     "оставлять кнопки после отката": [
       "    markup = None\n    if decision is Decision.APPROVE:",
@@ -88,6 +88,14 @@
     "путать вышедший пост с решённым": [
       "    if decision is Decision.CANCEL and row is not None and row[\"external_id\"]:",
       "    if False:"
+    ],
+    "одобрять последний вариант вместо выбранного": [
+      "        if decision is Decision.APPROVE and version is not None:",
+      "        if False:"
+    ],
+    "молча одобрять при пропавшем варианте": [
+      "            if not versions.restore(conn, post_id, version):\n                await query.answer(\n                    \"Этот вариант больше недоступен.\", show_alert=True\n                )\n                return",
+      "            versions.restore(conn, post_id, version)"
     ]
   }
 }

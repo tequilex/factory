@@ -66,25 +66,36 @@ ICON: dict[Decision, str] = {
 }
 
 
-def review_keyboard(post_id: int) -> dict:
-    """Клавиатура под постом. ``callback_data`` несёт номер поста и решение.
+def review_keyboard(post_id: int, version: int = 1) -> dict:
+    """Клавиатура под постом. ``callback_data`` несёт пост, решение и вариант.
 
-    Номер поста в самой кнопке, а не в состоянии бота: бот перезапускается, а
-    сообщение с кнопками остаётся жить в переписке неделями. Кнопка обязана
-    работать после перезапуска.
+    Всё нужное — в самой кнопке, а не в памяти бота: бот перезапускается, а
+    сообщения живут в переписке неделями. Нажатие на вариант, присланный три
+    дня назад, обязано сработать.
     """
     return {
         "inline_keyboard": [
             [
                 {
-                    "text": f"{ICON[item]} {LABEL[item]}",
-                    "callback_data": f"r:{post_id}:{item.value}",
+                    "text": f"{ICON[item]} {_label_for(item, version)}",
+                    "callback_data": f"r:{post_id}:{item.value}:{version}",
                 }
                 for item in row
             ]
             for row in KEYBOARD_ROWS
         ]
     }
+
+
+def _label_for(decision: Decision, version: int) -> str:
+    """У одобрения подпись зависит от того, есть ли выбор.
+
+    «Опубликовать этот» на единственном варианте звучит так, будто где-то есть
+    другие. «Опубликовать» на третьем из пяти не говорит, какой именно.
+    """
+    if decision is Decision.APPROVE and version > 1:
+        return "Опубликовать этот"
+    return LABEL[decision]
 
 
 def cancel_keyboard(post_id: int) -> dict:
@@ -106,17 +117,22 @@ def cancel_keyboard(post_id: int) -> dict:
     }
 
 
-def parse_callback(data: str) -> tuple[int, Decision] | None:
-    """Разобрать ``callback_data``. ``None`` — кнопка не наша или испорчена."""
+def parse_callback(data: str) -> tuple[int, Decision, int | None] | None:
+    """Разобрать ``callback_data``. ``None`` — кнопка не наша или испорчена.
+
+    Третье поле — номер варианта. Его может не быть: кнопки, отправленные до
+    появления вариантов, продолжают работать и означают «текущий».
+    """
     parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "r":
+    if len(parts) not in (3, 4) or parts[0] != "r":
         return None
     try:
         post_id = int(parts[1])
         decision = Decision(parts[2])
+        version = int(parts[3]) if len(parts) == 4 else None
     except ValueError:
         return None
-    return post_id, decision
+    return post_id, decision, version
 
 
 def _advice(code: int, description: str, token_env: str = "TELEGRAM_BOT_TOKEN") -> str:
@@ -285,11 +301,13 @@ class TelegramNotifier:
         warning: str | None,
         post_id: int,
         reply_to: int | None = None,
+        version: int = 1,
+        total: int = 1,
     ) -> ReviewMessage:
         data: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": _review_text(project, title, body, warning),
-            "reply_markup": _json(review_keyboard(post_id)),
+            "text": _review_text(project, title, body, warning, version, total),
+            "reply_markup": _json(review_keyboard(post_id, version)),
             "disable_web_page_preview": True,
         }
         if reply_to is not None:
@@ -347,13 +365,20 @@ def _cut(text: str) -> str:
     return text[: MAX_MESSAGE_LENGTH - len(tail)] + tail
 
 
-def _review_text(project: str, title: str, body: str, warning: str | None) -> str:
+def _review_text(
+    project: str, title: str, body: str, warning: str | None,
+    version: int = 1, total: int = 1,
+) -> str:
     """Что владелец видит под картинками.
 
     Имя проекта — первой строкой: при двух нишах иначе не понять, в какую группу
-    уйдёт пост, а кнопка «Опубликовать» выглядит одинаково.
+    уйдёт пост, а кнопка «Опубликовать» выглядит одинаково. Номер варианта —
+    там же: без него непонятно, сколько ещё вариантов выше в переписке.
     """
-    parts = [f"[{project}] {title}", "", body]
+    head = f"[{project}] {title}"
+    if total > 1:
+        head = f"[{project}] Вариант {version} из {total} · {title}"
+    parts = [head, "", body]
     if warning:
         parts += ["", f"⚠️ {warning}"]
     return _cut("\n".join(parts))

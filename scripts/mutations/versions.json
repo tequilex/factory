@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/versions.py",
+  "tests": ["tests/test_versions.py", "tests/test_review_bot.py"],
+  "mutations": {
+    "не сохранять промпты и картинки варианта": [
+      "                json.dumps(_assets_of(conn, post.id), ensure_ascii=False),",
+      "                \"[]\","
+    ],
+    "дублировать вариант при повторной записи": [
+      "            \"ON CONFLICT(post_id, number) DO UPDATE SET \"",
+      "            \"ON CONFLICT(post_id, number) DO NOTHING \" \"-- \""
+    ],
+    "не восстанавливать текст варианта": [
+      "                row[\"title\"], row[\"body\"], row[\"question\"], row[\"factcheck_verdict\"],",
+      "                row[\"title\"], \"\", row[\"question\"], row[\"factcheck_verdict\"],"
+    ],
+    "не восстанавливать картинки варианта": [
+      "        for item in saved:\n            conn.execute(",
+      "        for item in []:\n            conn.execute("
+    ],
+    "не переключать текущий номер при восстановлении": [
+      "                row[\"factcheck_notes\"], number, stamp, post_id,",
+      "                row[\"factcheck_notes\"], 1, stamp, post_id,"
+    ],
+    "молча соглашаться на несуществующий вариант": [
+      "    if row is None:\n        return False",
+      "    if row is None:\n        return True"
+    ],
+    "новый вариант затирает существующий": [
+      "    return max(highest, current) + 1",
+      "    return current + 1"
+    ],
+    "не считать варианты": [
+      "        \"SELECT COUNT(*) FROM post_versions WHERE post_id = ?\", (post_id,)",
+      "        \"SELECT COUNT(*) FROM post_versions WHERE post_id = ? AND 1 = 0\", (post_id,)"
+    ],
+    "считать варианты всех постов сразу": [
+      "        \"SELECT COUNT(*) FROM post_versions WHERE post_id = ?\", (post_id,)",
+      "        \"SELECT COUNT(*) FROM post_versions WHERE ? IS NOT NULL\", (post_id,)"
+    ]
+  }
+}

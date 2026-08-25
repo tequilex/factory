@@ -440,3 +440,62 @@ class TestCancelButton:
 
         assert "уже вышел" in query.said
         assert "в самой группе" in query.said
+
+
+class TestPublishingAnOldVariant:
+    """Одобряют тот вариант, под которым нажали, а не последний сделанный."""
+
+    @pytest.fixture
+    def two_variants(self, bot_env):
+        from factory.core import versions
+        from factory.core.decisions import Decision, apply
+
+        conn, post_id = bot_env["conn"], bot_env["post_id"]
+        versions.record(conn, machine_post(conn, post_id))
+        first = conn.execute("SELECT body FROM posts WHERE id = ?", (post_id,)).fetchone()["body"]
+
+        apply(conn, post_id, Decision.TEXT)
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET state = ?, body = ?, version = 2 WHERE id = ?",
+                (State.IN_REVIEW, "второй вариант текста", post_id),
+            )
+        versions.record(conn, machine_post(conn, post_id))
+
+        bot_env["first_body"] = first
+        return bot_env
+
+    def test_approving_the_first_brings_it_back(self, two_variants):
+        conn, post_id = two_variants["conn"], two_variants["post_id"]
+
+        two_variants["press"](f"r:{post_id}:ok:1")
+
+        row = conn.execute("SELECT state, body FROM posts WHERE id = ?", (post_id,)).fetchone()
+        assert row["state"] == State.APPROVED
+        assert row["body"] == two_variants["first_body"], "в группу уехал бы не тот вариант"
+
+    def test_approving_the_latest_leaves_it_alone(self, two_variants):
+        conn, post_id = two_variants["conn"], two_variants["post_id"]
+
+        two_variants["press"](f"r:{post_id}:ok:2")
+
+        row = conn.execute("SELECT body FROM posts WHERE id = ?", (post_id,)).fetchone()
+        assert row["body"] == "второй вариант текста"
+
+    def test_a_variant_that_no_longer_exists_is_explained(self, two_variants):
+        query = two_variants["press"](f"r:{two_variants['post_id']}:ok:99")
+
+        assert "недоступен" in query.said
+        assert state_of(two_variants) == State.IN_REVIEW
+
+    def test_an_old_button_without_a_variant_still_works(self, bot_env):
+        """Сообщения живут в переписке неделями и переживают обновления."""
+        bot_env["press"](f"r:{bot_env['post_id']}:ok")
+
+        assert state_of(bot_env) == State.APPROVED
+
+
+def machine_post(conn, post_id):
+    from factory.core.models import Post
+
+    return Post.from_row(conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone())

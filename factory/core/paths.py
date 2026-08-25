@@ -112,9 +112,15 @@ def env_file() -> Path:
     return data_dir() / ".env"
 
 
-def post_tmp_dir(post_id: int) -> Path:
-    """Images of a single post, removed once it is published."""
-    return tmp_dir() / str(post_id)
+def post_tmp_dir(post_id: int, version: int | None = None) -> Path:
+    """Images of a single post, removed once it is published.
+
+    ``version`` splits variants into their own folders. Without it a second
+    generation overwrites the first, and the owner cannot go back to a variant
+    they liked more — which is the whole point of having variants.
+    """
+    root = tmp_dir() / str(post_id)
+    return root if version is None else root / f"v{version}"
 
 
 def max_parallel_images() -> int:

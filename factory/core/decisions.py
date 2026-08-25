@@ -87,6 +87,13 @@ LABEL: dict[Decision, str] = {
 }
 
 
+def _next_version(conn: sqlite3.Connection, post_id: int) -> int:
+    """Номер следующего варианта. Считается по уже сохранённым, а не по счётчику."""
+    from factory.core.versions import next_number
+
+    return next_number(conn, post_id)
+
+
 def _snapshot(conn: sqlite3.Connection, post_id: int) -> str:
     """Что было в посте на момент отказа. Будущий обучающий набор.
 
@@ -194,12 +201,15 @@ def apply(
                 (target, stamp, by, stamp, post_id),
             )
         else:
+            # Откат — это заявка на новый вариант, а не правка нынешнего.
+            # Номер растёт, и картинки лягут в свою папку, не затирая прежние.
+            version = _next_version(conn, post_id) if decision is not Decision.TRASH else None
             conn.execute(
                 "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
                 "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
-                "review_album_message_id = NULL, "
+                "review_album_message_id = NULL, version = COALESCE(?, version), "
                 "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
-                (target, stamp, by, stamp, post_id),
+                (target, version, stamp, by, stamp, post_id),
             )
 
     log.info(

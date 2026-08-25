@@ -87,7 +87,7 @@ def run(ctx: StepContext) -> StepResult:
         ctx.log.info("все картинки уже на месте", extra={"post_id": ctx.post.id})
         return advanced(State.IMAGES_READY)
 
-    target_dir = paths.post_tmp_dir(ctx.post.id)
+    target_dir = paths.post_tmp_dir(ctx.post.id, ctx.post.version)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     workers = max(1, min(paths.max_parallel_images(), len(pending)))

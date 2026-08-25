@@ -2,7 +2,8 @@
   "module": "factory/core/steps/review.py",
   "tests": [
     "tests/test_decisions.py",
-    "tests/test_transitions.py"
+    "tests/test_transitions.py",
+    "tests/test_versions.py"
   ],
   "mutations": {
     "спрашивать владельца даже в режиме auto": [
@@ -76,6 +77,14 @@
     "терять связь текста с альбомом": [
       "        reply_to=album_id,",
       "        reply_to=None,"
+    ],
+    "не сохранять вариант перед показом": [
+      "    versions.record(ctx.conn, ctx.post)",
+      "    pass"
+    ],
+    "не говорить, какой это вариант из скольких": [
+      "        version=ctx.post.version,\n        total=versions.count(ctx.conn, ctx.post.id),",
+      "        version=1,\n        total=1,"
     ]
   }
 }

@@ -446,13 +446,33 @@ class TestImages:
             assert row["local_path"]
             assert Path(row["local_path"]).is_file()
 
-    def test_files_land_in_the_per_post_directory(self, pipeline):
+    def test_files_land_in_the_directory_of_their_variant(self, pipeline):
+        """По папке на вариант: иначе новая генерация затрёт предыдущую.
+
+        Затёртый вариант нельзя ни показать, ни опубликовать — а ради выбора
+        между вариантами всё и делалось.
+        """
         pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
         pipeline["run"](State.PROMPTS_READY)
 
-        expected = paths.post_tmp_dir(pipeline["post_id"])
+        expected = paths.post_tmp_dir(pipeline["post_id"], 1)
         for row in assets_of(pipeline["conn"], pipeline["post_id"]):
             assert Path(row["local_path"]).parent == expected
+
+    def test_a_new_variant_does_not_overwrite_the_old_files(self, pipeline):
+        conn, post_id = pipeline["conn"], pipeline["post_id"]
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        pipeline["run"](State.PROMPTS_READY)
+        first = [row["local_path"] for row in assets_of(conn, post_id)]
+
+        with db.write_transaction(conn):
+            conn.execute("UPDATE posts SET version = 2 WHERE id = ?", (post_id,))
+            conn.execute("UPDATE assets SET local_path = NULL WHERE post_id = ?", (post_id,))
+        pipeline["run"](State.PROMPTS_READY)
+
+        second = [row["local_path"] for row in assets_of(conn, post_id)]
+        assert set(first) & set(second) == set(), "новый вариант лёг поверх старого"
+        assert all(Path(path).is_file() for path in first), "файлы первого варианта пропали"
 
     def test_already_generated_images_are_not_paid_for_twice(self, pipeline):
         """Главный тест идемпотентности: картинки стоят денег."""

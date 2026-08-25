@@ -27,7 +27,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from factory.core import alerts, db, edits, paths, secrets
+from factory.core import alerts, db, edits, paths, secrets, versions
 from factory.core.config import ProjectConfig, load_project, resolve_secret
 from factory.core.decisions import LABEL, Decision, apply
 from factory.core.errors import ConfigError, FactoryError
@@ -155,7 +155,7 @@ def build_dispatcher(
             await query.answer("Кнопка испорчена.", show_alert=True)
             return
 
-        post_id, decision = parsed
+        post_id, decision, version = parsed
         slug = _project_of_post(conn, post_id)
 
         if not _may_press(current(), slug, query.from_user.id):
@@ -167,6 +167,16 @@ def build_dispatcher(
             await query.answer(NOT_YOURS, show_alert=True)
             return
 
+        # Одобряют тот вариант, под которым нажали, а не последний сделанный.
+        # Иначе выбор между вариантами не значил бы ничего: в группу всё равно
+        # уходил бы самый свежий.
+        if decision is Decision.APPROVE and version is not None:
+            if not versions.restore(conn, post_id, version):
+                await query.answer(
+                    "Этот вариант больше недоступен.", show_alert=True
+                )
+                return
+
         if not apply(conn, post_id, decision, by=query.from_user.id):
             await query.answer(
                 _refusal(conn, post_id, decision), show_alert=True
@@ -174,7 +184,7 @@ def build_dispatcher(
             return
 
         await query.answer(f"{ICON[decision]} {LABEL[decision]}")
-        await _replace_keyboard(query, decision, post_id)
+        await _replace_keyboard(query, decision, post_id, version or 1)
         await _confirm(query, decision, conn, current().get(slug or ""), slug)
 
     @dispatcher.errors()
@@ -286,7 +296,9 @@ async def _forget(message: Message) -> None:
         log.info("не удалось удалить сообщение с ключом", extra={"reason": str(exc)})
 
 
-async def _replace_keyboard(query: CallbackQuery, decision: Decision, post_id: int) -> None:
+async def _replace_keyboard(
+    query: CallbackQuery, decision: Decision, post_id: int, version: int = 1
+) -> None:
     """Поменять клавиатуру под тем, что теперь можно сделать.
 
     Одобрили — остаётся одна кнопка «Отменить публикацию»: пост ещё не вышел, и
@@ -298,7 +310,7 @@ async def _replace_keyboard(query: CallbackQuery, decision: Decision, post_id: i
     if decision is Decision.APPROVE:
         markup = _as_markup(cancel_keyboard(post_id))
     elif decision is Decision.CANCEL:
-        markup = _as_markup(review_keyboard(post_id))
+        markup = _as_markup(review_keyboard(post_id, version))
 
     try:
         await query.message.edit_reply_markup(reply_markup=markup)
