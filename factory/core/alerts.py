@@ -24,12 +24,26 @@ log = get_logger(__name__)
 
 _PREFIX = "alert:"
 
-# Ссылка, по которой владелец получает новый ключ загрузки. client_id — это
-# приложение проекта; scope нужен ровно тот, что требуют загрузка и стена.
-VK_TOKEN_URL = (
-    "https://oauth.vk.ru/authorize?client_id=54066965&scope=photos,wall,offline"
-    "&redirect_uri=https://oauth.vk.ru/blank.html&display=page&response_type=token&v=5.199"
+# Ссылка авторизации ВК. Собирается по образцу из docs/ВК-как-это-работает.md,
+# и каждая часть там проверена живьём:
+#
+# * домен **oauth.vk.com**, не .ru — на .ru тот же запрос отвечает Security Error;
+# * ``redirect_uri`` закодирован, незакодированный ВК не принимает;
+# * ``scope`` только ``photos``: право ``offline`` ВК отменил, и запрос
+#   несуществующего права ломает всю ссылку.
+#
+# ``client_id`` подставляется из конфига проекта: приложение заводит владелец,
+# и в общем коде его быть не может.
+VK_AUTHORIZE = (
+    "https://oauth.vk.com/authorize?client_id={app_id}&display=page"
+    "&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html"
+    "&scope=photos&response_type=token&v=5.199"
 )
+
+
+def vk_token_url(app_id: int | None) -> str | None:
+    """Ссылка на получение ключа, если известно приложение владельца."""
+    return VK_AUTHORIZE.format(app_id=app_id) if app_id else None
 
 
 def _key(name: str, scope: str) -> str:
@@ -83,17 +97,29 @@ def clear(conn: sqlite3.Connection, name: str, scope: str) -> None:
         conn.execute("DELETE FROM meta WHERE key = ?", (_key(name, scope),))
 
 
-def vk_token_expired_text(project: str, token_env: str) -> str:
+def vk_token_expired_text(project: str, token_env: str, app_id: int | None = None) -> str:
     """Текст про протухший ключ ВК: что делать, а не что сломалось."""
-    return (
+    head = (
         f"⚠️ [{project}] Публикация встала: ключ загрузки картинок в ВК истёк.\n\n"
         "Он живёт 24 часа, продлить нельзя — так устроен ВК.\n\n"
+    )
+    link = vk_token_url(app_id)
+    if link is None:
+        # Без приложения ссылку не собрать. Врать готовым решением нельзя:
+        # неработающая ссылка хуже честной отсылки к инструкции.
+        return head + (
+            "Что сделать: получить новый ключ по инструкции из RUNBOOK.md → "
+            "«Обновить ключ загрузки ВК» и прислать его мне сюда.\n\n"
+            f"Чтобы я присылал готовую ссылку, укажи vk.app_id в конфиге проекта.\n"
+            f"Переменная: {token_env}"
+        )
+    return head + (
         "Что сделать (полминуты):\n"
         "1. Открыть ссылку ниже и разрешить доступ.\n"
         "2. Скопировать из адресной строки браузера ВЕСЬ адрес.\n"
         "3. Прислать его мне сюда одним сообщением.\n\n"
-        f"{VK_TOKEN_URL}\n\n"
-        f"Ключ подставится сам, посты поедут дальше. "
+        f"{link}\n\n"
+        "Ключ подставится сам, посты поедут дальше. "
         f"Переменная: {token_env}"
     )
 

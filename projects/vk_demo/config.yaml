@@ -19,6 +19,9 @@ vk:
   token_env: VK_TOKEN_GROUP
   upload_token_env: VK_UPLOAD_TOKEN
 
+  # Приложение, через которое выдаётся ключ загрузки. Бот подставляет его
+  # в ссылку, которую присылает при истечении ключа.
+  app_id: 54733282
   api_version: "5.199"
   schedule: ["19:30", "21:00"]
   timezone: "Europe/Moscow"

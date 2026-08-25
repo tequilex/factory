@@ -316,7 +316,9 @@ def _alert_if_hopeless(conn: sqlite3.Connection, config, providers, exc: BaseExc
         chat_id=config.telegram.chat_id,
         name="vk_token",
         scope=config.slug,
-        text=alerts.vk_token_expired_text(config.slug, token_env or "VK_UPLOAD_TOKEN"),
+        text=alerts.vk_token_expired_text(
+            config.slug, token_env or "VK_UPLOAD_TOKEN", config.vk.app_id
+        ),
     )
 
 

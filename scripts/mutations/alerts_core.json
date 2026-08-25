@@ -29,13 +29,29 @@
       "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{name}:{scope}\"",
       "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{scope}\""
     ],
-    "не давать ссылку на получение ключа": [
-      "        f\"{VK_TOKEN_URL}\\n\\n\"",
-      "        \"\\n\\n\""
-    ],
     "срок застревания в час вместо суток": [
       "STUCK_AFTER_HOURS = 24",
       "STUCK_AFTER_HOURS = 1"
+    ],
+    "домен .ru вместо .com": [
+      "    \"https://oauth.vk.com/authorize?client_id={app_id}&display=page\"",
+      "    \"https://oauth.vk.ru/authorize?client_id={app_id}&display=page\""
+    ],
+    "просить отменённое право offline": [
+      "    \"&scope=photos&response_type=token&v=5.199\"",
+      "    \"&scope=photos,offline&response_type=token&v=5.199\""
+    ],
+    "не кодировать адрес возврата": [
+      "    \"&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html\"",
+      "    \"&redirect_uri=https://oauth.vk.com/blank.html\""
+    ],
+    "выдумать приложение вместо конфига": [
+      "    return VK_AUTHORIZE.format(app_id=app_id) if app_id else None",
+      "    return VK_AUTHORIZE.format(app_id=54066965)"
+    ],
+    "давать ссылку без приложения": [
+      "    if link is None:",
+      "    if False:"
     ]
   }
 }

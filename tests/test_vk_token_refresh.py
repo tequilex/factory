@@ -238,12 +238,20 @@ class TestAlertOnce:
             conn, working, chat_id=OWNER, name="vk_token", scope="demo", text="ключ истёк"
         ) is True
 
-    def test_the_message_carries_the_link_and_the_steps(self, conn):
-        text = alerts.vk_token_expired_text("vk_demo", "VK_UPLOAD_TOKEN")
+    def test_the_message_carries_the_steps(self, conn):
+        """Проверять наличие ссылки мало — она была и не работала.
 
-        assert "oauth.vk.ru/authorize" in text
+        Прежняя версия этого теста требовала подстроку «oauth.vk.ru/authorize»
+        и тем самым закрепляла ошибку: домен .ru отвечает Security Error. Саму
+        ссылку проверяет TestTheAuthorizeLink, сверяя её с рецептом из
+        документации; здесь — что в сообщении есть проект, переменная и
+        понятное действие.
+        """
+        text = alerts.vk_token_expired_text("vk_demo", "VK_UPLOAD_TOKEN", 54733282)
+
         assert "VK_UPLOAD_TOKEN" in text
         assert "vk_demo" in text
+        assert "Прислать его мне сюда" in text
 
 
 class TestVkErrorCarriesTheToken:
@@ -495,3 +503,69 @@ class TestTheWholeChainWorks:
         secrets.load_env_file(refresh=True)
 
         assert os.environ["VK_UPLOAD_TOKEN"] == "vk1.a.свежий"
+
+
+class TestTheAuthorizeLink:
+    """Ссылка на получение ключа — единственное действие в сообщении бота.
+
+    Неработающая ссылка обесценивает всю тревогу: владелец не может сделать
+    ровно то, ради чего его позвали. Проверялась живьём — каждая часть здесь
+    закреплена по документации, а не по памяти.
+    """
+
+    def test_it_matches_the_verified_recipe(self):
+        """Строка целиком, литералом: собранная по частям сверяла бы код с кодом."""
+        assert alerts.vk_token_url(54733282) == (
+            "https://oauth.vk.com/authorize?client_id=54733282&display=page"
+            "&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html"
+            "&scope=photos&response_type=token&v=5.199"
+        )
+
+    def test_the_domain_is_com_not_ru(self):
+        """На oauth.vk.ru тот же запрос отвечает Security Error. Проверено."""
+        link = alerts.vk_token_url(54733282)
+
+        assert "oauth.vk.com" in link
+        assert "oauth.vk.ru" not in link
+
+    def test_it_does_not_ask_for_offline(self):
+        """Право offline ВК отменил: запрос несуществующего ломает всю ссылку."""
+        assert "offline" not in alerts.vk_token_url(54733282)
+
+    def test_the_redirect_is_encoded(self):
+        """Незакодированный redirect_uri ВК не принимает."""
+        link = alerts.vk_token_url(54733282)
+
+        assert "redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html" in link
+
+    def test_the_app_id_comes_from_the_config(self):
+        """Приложение заводит владелец: в коде его быть не может."""
+        assert "client_id=777" in alerts.vk_token_url(777)
+
+    def test_without_an_app_id_no_link_is_invented(self):
+        assert alerts.vk_token_url(None) is None
+
+    def test_the_message_sends_the_owner_to_the_runbook_instead(self):
+        """Честная отсылка к инструкции лучше ссылки, которая не откроется."""
+        text = alerts.vk_token_expired_text("vk_demo", "VK_UPLOAD_TOKEN", None)
+
+        assert "RUNBOOK" in text
+        assert "vk.app_id" in text
+        assert "oauth.vk.com/authorize" not in text
+
+    def test_the_message_carries_the_link_when_it_can(self):
+        text = alerts.vk_token_expired_text("vk_demo", "VK_UPLOAD_TOKEN", 54733282)
+
+        assert alerts.vk_token_url(54733282) in text
+
+
+class TestTheLinkAgreesWithTheDocs:
+    def test_the_runbook_shows_the_same_url(self):
+        """Два разных рецепта в боте и в RUNBOOK — это один неверный."""
+        from pathlib import Path
+
+        runbook = (Path(__file__).resolve().parent.parent / "RUNBOOK.md").read_text(
+            encoding="utf-8"
+        )
+
+        assert alerts.vk_token_url(54733282) in runbook
