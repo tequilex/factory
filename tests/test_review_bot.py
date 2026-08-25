@@ -397,23 +397,47 @@ class TestNextSlot:
 
 
 class TestApprovalRespectsTheScheduleSwitch:
-    def test_with_the_schedule_off_no_slot_is_promised(self, bot_env, monkeypatch):
-        """Иначе бот называет час, до которого никто ждать не собирается."""
+    """Подтверждение обязано спрашивать то же, что спрашивает публикация.
+
+    Иначе владелец выключает расписание командой в боте, одобряет пост и видит
+    «уходит в 10:00» — то есть подтверждение опровергает сообщение, которое бот
+    прислал минуту назад.
+    """
+
+    def project(self, bot_env):
         from factory.core.config import TelegramCfg
 
-        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
         base = bot_env["project"]
-        project = base.model_copy(
+        return base.model_copy(
             update={
                 "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER]),
                 "vk": base.vk.model_copy(update={"schedule": ["19:30"], "app_id": 1}),
             }
         )
 
-        text = review_bot._approval_text(bot_env["conn"], project, "demo")
+    def test_the_environment_switch_is_respected(self, bot_env, monkeypatch):
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+
+        text = review_bot._approval_text(bot_env["conn"], self.project(bot_env), "demo")
 
         assert "расписание отключено" in text
         assert "19:30" not in text
+
+    def test_the_bot_switch_is_respected_too(self, bot_env):
+        """Именно это и промахнулось: переключатель жил в базе, а не в окружении."""
+        from factory.core import topics
+
+        topics.set_schedule_off(bot_env["conn"], "demo", True)
+
+        text = review_bot._approval_text(bot_env["conn"], self.project(bot_env), "demo")
+
+        assert "расписание отключено" in text
+        assert "19:30" not in text
+
+    def test_with_the_schedule_on_the_slot_is_named(self, bot_env):
+        text = review_bot._approval_text(bot_env["conn"], self.project(bot_env), "demo")
+
+        assert "19:30" in text
 
 
 class TestCancelButton:

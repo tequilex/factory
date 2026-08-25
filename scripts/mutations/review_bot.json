@@ -178,6 +178,10 @@
     "не давать пути назад из переспроса": [
       "    if parts[2] == ASK_TRASH:\n        await query.answer()\n        await _replace_markup(query, trash_keyboard(post_id, version))\n    else:\n        await query.answer(\"Оставляю.\")\n        await _replace_markup(query, review_keyboard(post_id, version))",
       "    await query.answer()\n    await _replace_markup(query, trash_keyboard(post_id, version))"
+    ],
+    "обещать слот при выключенном расписании": [
+      "    if topics.schedule_is_off(conn, slug):",
+      "    if paths.ignore_schedule():"
     ]
   }
 }
