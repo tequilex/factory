@@ -40,6 +40,7 @@ from factory.providers.notifiers.telegram import (
     extract_vk_token,
     parse_callback,
     review_keyboard,
+    variant_keyboard,
 )
 
 log = get_logger(__name__)
@@ -303,14 +304,22 @@ async def _replace_keyboard(
 
     Одобрили — остаётся одна кнопка «Отменить публикацию»: пост ещё не вышел, и
     до ближайшего слота владелец вправе передумать. Отменили — возвращаются все
-    решения. Откат или мусор — кнопок нет: пост уедет и вернётся новым
-    сообщением.
+    решения.
+
+    Откат — остаётся «Опубликовать этот вариант». В этом весь смысл вариантов:
+    новый приходит отдельным сообщением, а прежний остаётся здесь и его можно
+    выбрать обратно. Убрать кнопки значило бы вернуться к тому, от чего уходили,
+    — посмотреть другой вариант ценой потери этого.
+
+    В мусор — кнопок нет: пост выброшен, публиковать нечего.
     """
     markup = None
     if decision is Decision.APPROVE:
         markup = _as_markup(cancel_keyboard(post_id))
     elif decision is Decision.CANCEL:
         markup = _as_markup(review_keyboard(post_id, version))
+    elif decision in (Decision.TEXT, Decision.SCENES, Decision.IMAGES):
+        markup = _as_markup(variant_keyboard(post_id, version))
 
     try:
         await query.message.edit_reply_markup(reply_markup=markup)
@@ -379,9 +388,18 @@ async def _confirm(
     text = {
         Decision.APPROVE: _approval_text(conn, project, slug),
         Decision.CANCEL: "↩️ Публикация отменена, пост снова ждёт вашего решения.",
-        Decision.IMAGES: "🔄 Картинки будут перерисованы, текст сохранён.",
-        Decision.SCENES: "🎲 Сцены придумаются заново, текст сохранён.",
-        Decision.TEXT: "✏️ Текст будет написан заново, тема остаётся.",
+        Decision.IMAGES: (
+            "🔄 Картинки будут перерисованы, текст сохранён.\n\n"
+            "Этот вариант никуда не делся: кнопка под ним осталась."
+        ),
+        Decision.SCENES: (
+            "🎲 Сцены придумаются заново, текст сохранён.\n\n"
+            "Этот вариант никуда не делся: кнопка под ним осталась."
+        ),
+        Decision.TEXT: (
+            "✏️ Текст будет написан заново, тема остаётся.\n\n"
+            "Этот вариант никуда не делся: кнопка под ним осталась."
+        ),
         Decision.TRASH: "🗑 Пост выброшен, тема вернулась в очередь.",
     }[decision]
     try:

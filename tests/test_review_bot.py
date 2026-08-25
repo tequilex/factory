@@ -421,11 +421,32 @@ class TestCancelButton:
 
         assert "отменена" in query.message.answered[-1]
 
-    def test_a_rollback_leaves_no_buttons(self, bot_env):
-        """Пост уедет переделываться и вернётся новым сообщением."""
-        query = bot_env["press"](f"r:{bot_env['post_id']}:txt")
+    @pytest.mark.parametrize("decision", ["txt", "scn", "img"])
+    def test_a_rollback_leaves_the_variant_publishable(self, bot_env, decision):
+        """В этом весь смысл вариантов: посмотреть другой, не потеряв этот.
+
+        Убрать кнопки со старого сообщения значит вернуться к тому, от чего
+        уходили — выбор между вариантами снова становится невозможен.
+        """
+        query = bot_env["press"](f"r:{bot_env['post_id']}:{decision}:1")
+
+        markup = query.message.last_markup
+        assert markup is not None, "старый вариант остался без кнопки"
+        buttons = [b for row in markup.inline_keyboard for b in row]
+        assert len(buttons) == 1
+        assert "Опубликовать" in buttons[0].text
+        assert buttons[0].callback_data.endswith(":1"), "кнопка ведёт не на свой вариант"
+
+    def test_trashing_leaves_no_buttons(self, bot_env):
+        """Пост выброшен — публиковать нечего."""
+        query = bot_env["press"](f"r:{bot_env['post_id']}:del:1")
 
         assert query.message.last_markup is None
+
+    def test_the_owner_is_told_the_variant_is_kept(self, bot_env):
+        query = bot_env["press"](f"r:{bot_env['post_id']}:txt:1")
+
+        assert "никуда не делся" in query.message.answered[-1]
 
     def test_cancelling_a_published_post_says_why_not(self, bot_env):
         """Общее «решение уже принято» тут вводит в заблуждение."""

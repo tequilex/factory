@@ -117,6 +117,26 @@ def cancel_keyboard(post_id: int) -> dict:
     }
 
 
+def variant_keyboard(post_id: int, version: int) -> dict:
+    """Единственная кнопка под вариантом, который отложили в сторону.
+
+    Остальные решения под ним больше не значат ничего: пост уже переделывается,
+    и «Текст заново» на старом сообщении завёл бы третий вариант вместо выбора
+    между первыми двумя. А вот опубликовать этот вариант — ровно то, ради чего
+    он сохранён.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": f"{ICON[Decision.APPROVE]} Опубликовать этот вариант",
+                    "callback_data": f"r:{post_id}:{Decision.APPROVE.value}:{version}",
+                }
+            ]
+        ]
+    }
+
+
 def parse_callback(data: str) -> tuple[int, Decision, int | None] | None:
     """Разобрать ``callback_data``. ``None`` — кнопка не наша или испорчена.
 

@@ -96,6 +96,18 @@
     "молча одобрять при пропавшем варианте": [
       "            if not versions.restore(conn, post_id, version):\n                await query.answer(\n                    \"Этот вариант больше недоступен.\", show_alert=True\n                )\n                return",
       "            versions.restore(conn, post_id, version)"
+    ],
+    "убирать кнопку с отложенного варианта": [
+      "    elif decision in (Decision.TEXT, Decision.SCENES, Decision.IMAGES):\n        markup = _as_markup(variant_keyboard(post_id, version))",
+      "    elif False:\n        markup = _as_markup(variant_keyboard(post_id, version))"
+    ],
+    "оставлять кнопку и на выброшенном посте": [
+      "    elif decision in (Decision.TEXT, Decision.SCENES, Decision.IMAGES):",
+      "    elif True:"
+    ],
+    "вести кнопку варианта на текущий": [
+      "        markup = _as_markup(variant_keyboard(post_id, version))",
+      "        markup = _as_markup(variant_keyboard(post_id, version + 1))"
     ]
   }
 }
