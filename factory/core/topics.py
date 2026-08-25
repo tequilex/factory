@@ -125,3 +125,42 @@ def set_paused(conn: sqlite3.Connection, slug: str, paused: bool) -> bool:
 def is_paused(conn: sqlite3.Connection, slug: str) -> bool:
     row = conn.execute("SELECT is_active FROM projects WHERE slug = ?", (slug,)).fetchone()
     return row is not None and not row["is_active"]
+
+
+#: Ключ в ``meta``: этот проект публикует в обход расписания.
+#:
+#: Настройка живёт в базе, а не в переменной окружения, потому что переключать
+#: её владелец должен из телефона. Переменная ``FACTORY_IGNORE_SCHEDULE``
+#: остаётся глобальным рубильником для отладки и главнее: она задаётся тем, кто
+#: запускает процесс, и молча отменять её решение нельзя.
+_SCHEDULE_OFF = "schedule_off:"
+
+
+def schedule_is_off(conn: sqlite3.Connection, slug: str) -> bool:
+    """Публикует ли проект в обход расписания."""
+    from factory.core import paths
+
+    if paths.ignore_schedule():
+        return True
+    row = conn.execute(
+        "SELECT 1 FROM meta WHERE key = ?", (f"{_SCHEDULE_OFF}{slug}",)
+    ).fetchone()
+    return row is not None
+
+
+def set_schedule_off(conn: sqlite3.Connection, slug: str, off: bool) -> None:
+    """Включить или выключить расписание для проекта."""
+    from factory.core.clock import now_utc, to_iso
+
+    key = f"{_SCHEDULE_OFF}{slug}"
+    with db.write_transaction(conn):
+        if off:
+            stamp = to_iso(now_utc())
+            conn.execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES (?, '1', ?) "
+                "ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at",
+                (key, stamp),
+            )
+        else:
+            conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+    log.info("расписание переключено", extra={"slug": slug, "f_off": off})

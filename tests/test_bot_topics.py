@@ -467,3 +467,62 @@ class TestTheCommandMenu:
     def test_every_entry_explains_itself(self, bot):
         """Пустое описание в выпадашке бесполезно."""
         assert all(text.strip() for _, text in review_bot.COMMANDS)
+
+
+class TestSchedule:
+    """Расписание переключается из телефона, а не переменной окружения.
+
+    Переменную задаёт тот, кто запускает процесс; владелец до неё не дотянется,
+    а решать «выходит сразу или ждёт вечера» приходится ему.
+    """
+
+    def test_by_default_posts_wait_for_a_slot(self, bot):
+        assert not topics.schedule_is_off(bot["conn"], "demo")
+
+    def test_it_can_be_switched_off(self, bot):
+        bot["send"]("on_schedule_off")
+
+        assert topics.schedule_is_off(bot["conn"], "demo")
+
+    def test_and_back_on(self, bot):
+        bot["send"]("on_schedule_off")
+
+        bot["send"]("on_schedule_on")
+
+        assert not topics.schedule_is_off(bot["conn"], "demo")
+
+    def test_the_state_is_shown_with_the_slots(self, bot):
+        text = bot["send"]("on_schedule").answered[0]
+
+        assert "слота" in text or "слоты" in text.lower()
+
+    def test_switching_off_warns_the_limit_still_applies(self, bot):
+        """Лимит про количество, а не про время — иначе владелец решит, что сломалось."""
+        text = bot["send"]("on_schedule_off").answered[0]
+
+        assert "лимит" in text
+
+    def test_a_stranger_cannot_switch_it(self, bot):
+        bot["send"]("on_schedule_off", user=STRANGER)
+
+        assert not topics.schedule_is_off(bot["conn"], "demo")
+
+    def test_the_environment_switch_still_wins(self, bot, monkeypatch):
+        """Глобальный рубильник задаёт тот, кто запускает процесс.
+
+        Молча отменять его решение из переписки нельзя: человек за терминалом
+        включил его осознанно и не увидит, что настройку перебили.
+        """
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        bot["send"]("on_schedule_on")
+
+        assert topics.schedule_is_off(bot["conn"], "demo")
+
+    def test_each_project_switches_on_its_own(self, bot):
+        from tests.conftest import insert_project
+
+        insert_project(bot["conn"], "другой")
+        bot["send"]("on_schedule_off")
+
+        assert topics.schedule_is_off(bot["conn"], "demo")
+        assert not topics.schedule_is_off(bot["conn"], "другой")

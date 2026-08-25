@@ -1,6 +1,10 @@
 {
   "module": "factory/core/topics.py",
-  "tests": ["tests/test_bot_topics.py", "tests/test_queue.py", "tests/test_cli.py"],
+  "tests": [
+    "tests/test_bot_topics.py",
+    "tests/test_queue.py",
+    "tests/test_cli.py"
+  ],
   "mutations": {
     "добавлять повторы": [
       "            if not title or title in existing:",
@@ -23,7 +27,8 @@
       "        \"SELECT title FROM topics WHERE project_id = ? AND status = ? ORDER BY id DESC LIMIT ?\",\n        (project_id, TopicStatus.FREE, limit),"
     ],
     "вываливать весь список без ограничения": [
-      "PREVIEW = 10", "PREVIEW = 1000"
+      "PREVIEW = 10",
+      "PREVIEW = 1000"
     ],
     "показывать занятые темы как свободные": [
       "        (project_id, TopicStatus.FREE, limit),",
@@ -36,6 +41,22 @@
     "снятие паузы не возвращает проект": [
       "            \"UPDATE projects SET is_active = ? WHERE slug = ?\", (0 if paused else 1, slug)",
       "            \"UPDATE projects SET is_active = ? WHERE slug = ?\", (0, slug)"
+    ],
+    "переменная окружения перестаёт быть главной": [
+      "    if paths.ignore_schedule():\n        return True",
+      "    if False:\n        return True"
+    ],
+    "расписание нельзя выключить": [
+      "    row = conn.execute(\n        \"SELECT 1 FROM meta WHERE key = ?\", (f\"{_SCHEDULE_OFF}{slug}\",)\n    ).fetchone()\n    return row is not None",
+      "    return False"
+    ],
+    "выключать расписание всем проектам сразу": [
+      "    key = f\"{_SCHEDULE_OFF}{slug}\"",
+      "    key = _SCHEDULE_OFF"
+    ],
+    "не возвращать расписание обратно": [
+      "            conn.execute(\"DELETE FROM meta WHERE key = ?\", (key,))",
+      "            pass"
     ]
   }
 }

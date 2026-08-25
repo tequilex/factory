@@ -169,7 +169,9 @@ def run(ctx: StepContext) -> StepResult:
     if already >= ctx.project.limits.posts_per_day:
         return waiting(f"дневной лимит исчерпан: {already} из {ctx.project.limits.posts_per_day}")
 
-    if not paths.ignore_schedule():
+    from factory.core.topics import schedule_is_off
+
+    if not schedule_is_off(ctx.conn, ctx.project.slug):
         moment = now_utc()
         slot = open_slot(ctx.project, moment)
         if slot is None:

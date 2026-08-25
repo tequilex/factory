@@ -209,7 +209,7 @@ class TestDecisions:
         query = bot_env["press"](f"r:{bot_env['post_id']}:del")
 
         assert state_of(bot_env) == State.APPROVED, "второе нажатие переиграло решение"
-        assert "уже принято" in query.said
+        assert "одобрен" in query.said, "владельцу не сказали, что с постом на самом деле"
 
 
 class TestBrokenInput:
@@ -458,6 +458,36 @@ class TestCancelButton:
         query = bot_env["press"](f"r:{bot_env['post_id']}:txt:1")
 
         assert "никуда не делся" in query.message.answered[-1]
+
+    def test_a_stale_keyboard_heals_itself(self, bot_env):
+        """Состояние могли поменять не через это сообщение.
+
+        Из командной строки, другим сообщением или самим воркером — и тогда
+        кнопки под ним ведут в никуда. Отвечать «решение уже принято» и
+        оставлять тупик значит заставить владельца гадать.
+        """
+        conn, post_id = bot_env["conn"], bot_env["post_id"]
+        bot_env["press"](f"r:{post_id}:ok")
+        # Кто-то вернул пост на ревью в обход бота.
+        with db.write_transaction(conn):
+            conn.execute("UPDATE posts SET state = ? WHERE id = ?", (State.IN_REVIEW, post_id))
+
+        query = bot_env["press"](f"r:{post_id}:back")
+
+        assert "ждёт решения" in query.said
+        buttons = [b for row in query.message.last_markup.inline_keyboard for b in row]
+        assert len(buttons) == 5, "кнопки не привели в соответствие состоянию"
+
+    def test_a_stale_keyboard_on_a_broken_post_offers_the_fix(self, bot_env):
+        conn, post_id = bot_env["conn"], bot_env["post_id"]
+        with db.write_transaction(conn):
+            conn.execute("UPDATE posts SET state = ? WHERE id = ?", (State.FAILED, post_id))
+
+        query = bot_env["press"](f"r:{post_id}:ok")
+
+        buttons = [b for row in query.message.last_markup.inline_keyboard for b in row]
+        assert len(buttons) == 1
+        assert "снова" in buttons[0].text
 
     def test_cancelling_a_published_post_says_why_not(self, bot_env):
         """Общее «решение уже принято» тут вводит в заблуждение."""

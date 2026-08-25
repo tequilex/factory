@@ -40,6 +40,7 @@ from factory.providers.notifiers.telegram import (
     cancel_keyboard,
     extract_vk_token,
     parse_callback,
+    retry_keyboard,
     review_keyboard,
     variant_keyboard,
 )
@@ -68,6 +69,9 @@ START_TEXT = (
 COMMANDS: tuple[tuple[str, str], ...] = (
     ("status", "что происходит прямо сейчас"),
     ("topics", "сколько тем осталось"),
+    ("schedule", "публиковать по расписанию или сразу"),
+    ("schedule_on", "ждать слота расписания"),
+    ("schedule_off", "публиковать сразу после одобрения"),
     ("pause", "остановить выпуск"),
     ("resume", "продолжить выпуск"),
     ("start", "что это за бот"),
@@ -79,11 +83,50 @@ ALREADY_OUT = "Пост уже вышел в группу — отменить �
 
 
 def _refusal(conn: sqlite3.Connection, post_id: int, decision: Decision) -> str:
-    """Почему нажатие не сработало. Общее «уже принято» тут вводит в заблуждение."""
-    row = conn.execute("SELECT external_id FROM posts WHERE id = ?", (post_id,)).fetchone()
-    if decision is Decision.CANCEL and row is not None and row["external_id"]:
+    """Почему нажатие не сработало.
+
+    Общее «уже принято» вводит в заблуждение: чаще всего решение принято не
+    было, а пост просто уехал дальше или вернулся назад. Владелец должен
+    понимать, что делать, а не гадать.
+    """
+    row = conn.execute(
+        "SELECT state, external_id FROM posts WHERE id = ?", (post_id,)
+    ).fetchone()
+    if row is None:
+        return ALREADY_DONE
+
+    if decision is Decision.CANCEL and row["external_id"]:
         return ALREADY_OUT
-    return ALREADY_DONE
+
+    return {
+        State.IN_REVIEW: "Пост снова ждёт решения — кнопки под ним обновил.",
+        State.APPROVED: "Пост уже одобрен и ждёт публикации.",
+        State.PUBLISHED: ALREADY_OUT,
+        State.REJECTED: "Пост выброшен, тема вернулась в очередь.",
+        State.FAILED: "Пост сломался. Кнопка починки — в сообщении о поломке.",
+    }.get(row["state"], "Пост сейчас переделывается, решать пока нечего.")
+
+
+async def _refresh_keyboard(
+    conn: sqlite3.Connection, query: CallbackQuery, post_id: int, version: int
+) -> None:
+    """Показать под сообщением то, что с постом можно сделать сейчас."""
+    row = conn.execute("SELECT state FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if row is None:
+        return
+
+    markup = None
+    if row["state"] == State.IN_REVIEW:
+        markup = _as_markup(review_keyboard(post_id, version))
+    elif row["state"] == State.APPROVED:
+        markup = _as_markup(cancel_keyboard(post_id, version))
+    elif row["state"] == State.FAILED:
+        markup = _as_markup(retry_keyboard(post_id))
+
+    try:
+        await query.message.edit_reply_markup(reply_markup=markup)
+    except Exception as exc:  # noqa: BLE001 — косметика, решение уже отвергнуто
+        log.info("не удалось обновить кнопки", extra={"reason": str(exc)})
 
 
 def _looks_like_a_vk_key(message: Message) -> bool:
@@ -174,9 +217,25 @@ def build_dispatcher(
     async def on_topics(message: Message) -> None:
         await message.answer(_topics_text(conn, current(), message.from_user.id))
 
+    @dispatcher.message(Command("schedule"))
+    async def on_schedule(message: Message) -> None:
+        await message.answer(_schedule_text(conn, current(), message.from_user.id))
+
+    @dispatcher.callback_query(F.data.startswith("s:"))
+    async def on_schedule_switch(query: CallbackQuery) -> None:
+        await _switch_schedule(conn, current(), query)
+
     @dispatcher.message(Command("pause"))
     async def on_pause(message: Message) -> None:
         await message.answer(_switch(conn, current(), message.from_user.id, paused=True))
+
+    @dispatcher.message(Command("schedule_on"))
+    async def on_schedule_on(message: Message) -> None:
+        await message.answer(_set_schedule(conn, current(), message.from_user.id, off=False))
+
+    @dispatcher.message(Command("schedule_off"))
+    async def on_schedule_off(message: Message) -> None:
+        await message.answer(_set_schedule(conn, current(), message.from_user.id, off=True))
 
     @dispatcher.message(Command("resume"))
     async def on_resume(message: Message) -> None:
@@ -241,9 +300,12 @@ def build_dispatcher(
         # это давало дыру, при которой отклонённое решение всё равно подменяло
         # содержимое поста.
         if not apply(conn, post_id, decision, by=query.from_user.id, version=version):
-            await query.answer(
-                _refusal(conn, post_id, decision), show_alert=True
-            )
+            await query.answer(_refusal(conn, post_id, decision), show_alert=True)
+            # Кнопка устарела: состояние поста поменялось не через это
+            # сообщение — из командной строки, другим сообщением или самим
+            # воркером. Приводим клавиатуру к тому, что с постом можно делать
+            # сейчас, иначе сообщение остаётся тупиком навсегда.
+            await _refresh_keyboard(conn, query, post_id, version or 1)
             return
 
         await query.answer(f"{ICON[decision]} {LABEL[decision]}")
@@ -370,6 +432,67 @@ def _switch(
             "подождут. Продолжить — /resume."
         )
     return f"▶️ Продолжаем: {names}."
+
+
+def _set_schedule(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], user_id: int, *, off: bool
+) -> str:
+    mine = _mine(projects, user_id)
+    if not mine:
+        return NOT_YOURS
+
+    for slug, _ in mine:
+        topics.set_schedule_off(conn, slug, off)
+
+    if off:
+        return (
+            "⚡ Посты будут выходить сразу после одобрения, не дожидаясь слота.\n\n"
+            "Дневной лимит при этом действует. Вернуть расписание — /schedule_on"
+        )
+    return "🕒 Посты будут ждать своего слота. Публиковать сразу — /schedule_off"
+
+
+def _schedule_text(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], user_id: int
+) -> str:
+    mine = _mine(projects, user_id)
+    if not mine:
+        return NOT_YOURS
+
+    slug, project = mine[0]
+    off = topics.schedule_is_off(conn, slug)
+    slots = ", ".join(project.vk.schedule) or "не заданы"
+
+    if off:
+        return (
+            f"[{slug}] Сейчас посты выходят **сразу** после одобрения.\n\n"
+            f"Слоты расписания: {slots}.\n\n"
+            "Включить расписание — /schedule_on"
+        )
+    return (
+        f"[{slug}] Сейчас посты ждут слота расписания: {slots}.\n\n"
+        "Публиковать сразу после одобрения — /schedule_off"
+    )
+
+
+async def _switch_schedule(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery
+) -> None:
+    if not _mine(projects, query.from_user.id):
+        await query.answer(NOT_YOURS, show_alert=True)
+        return
+
+    off = (query.data or "").endswith(":off")
+    for slug, _ in _mine(projects, query.from_user.id):
+        topics.set_schedule_off(conn, slug, off)
+
+    await _drop_keyboard(query)
+    await query.answer("Готово")
+    await query.message.answer(
+        "⚡ Посты выходят сразу после одобрения."
+        if off
+        else "🕒 Посты ждут своего слота расписания."
+    )
 
 
 def _pending_key(marker: int | str) -> str:
