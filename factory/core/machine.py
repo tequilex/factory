@@ -280,6 +280,19 @@ def advance_post(
         try:
             result = handler_for(post.state)(ctx)
         except Exception as exc:  # noqa: BLE001 — recorded, then the chain stops
+            if getattr(exc, "token_expired", False):
+                # Истёкший ключ ретраями не лечится: он не станет действительным
+                # сам. Считать это ошибкой значит сжигать бюджет попыток на
+                # ожидание человека — пост умирает за час, пока владелец спит,
+                # хотя достаточно было дождаться нового ключа. Это ровно то, для
+                # чего существует WAITING.
+                try:
+                    _alert_if_hopeless(conn, config, providers, exc)
+                except Exception:  # noqa: BLE001 — уведомление о поломке не поломка
+                    log.exception("не удалось позвать владельца")
+                record_wait(conn, post, str(exc).splitlines()[0])
+                break
+
             record_failure(conn, post, exc)
             try:
                 _alert_if_hopeless(conn, config, providers, exc)

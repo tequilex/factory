@@ -327,7 +327,10 @@ class TestTheSecondGuard:
         # Не должно поднять RuntimeError наружу: тик обязан дожить до хартбита.
         machine.advance_post(conn, post, watched["watched_project"], watched["providers"])
 
-        assert machine.reload_post(conn, watched["post_id"]).retry_count == 1
+        # Пост при этом обработан как положено: ждёт ключа, а не считает попытки.
+        after = machine.reload_post(conn, watched["post_id"])
+        assert after.state == State.APPROVED
+        assert after.next_attempt_at is not None
 
 
 class TestAlertsDoNotOverwriteEachOther:
@@ -364,3 +367,76 @@ class TestStuckThreshold:
         age(watched["conn"], watched["post_id"], 12)
 
         assert watched["check"]() == []
+
+
+class TestExpiredKeyIsWaitingNotFailure:
+    """Истёкший ключ — ожидание человека, а не поломка поста.
+
+    Ключ не станет действительным сам, поэтому пять попыток просто сжигают
+    бюджет: пост умирает за час, пока владелец спит, хотя достаточно было
+    дождаться нового ключа. Ровно для этого и существует WAITING.
+    """
+
+    @pytest.fixture
+    def expired(self, watched, monkeypatch):
+        from factory.core.errors import FactoryError
+        from factory.core.steps import REGISTRY
+
+        class ExpiredKey(FactoryError):
+            token_expired = True
+            token_env = "VK_UPLOAD_TOKEN"
+
+        def failing(ctx):
+            raise ExpiredKey("ключ истёк")
+
+        watched["context"](State.APPROVED)
+        monkeypatch.setitem(REGISTRY, State.APPROVED, failing)
+        return watched
+
+    def run_once(self, watched):
+        post = machine.reload_post(watched["conn"], watched["post_id"])
+        machine.advance_post(
+            watched["conn"], post, watched["watched_project"], watched["providers"]
+        )
+        return machine.reload_post(watched["conn"], watched["post_id"])
+
+    def test_the_retry_budget_is_untouched(self, expired):
+        for _ in range(6):
+            post = self.run_once(expired)
+
+        assert post.retry_count == 0, "ожидание человека сожгло попытки"
+
+    def test_the_post_does_not_die(self, expired):
+        for _ in range(6):
+            post = self.run_once(expired)
+
+        assert post.state == State.APPROVED, "пост умер, ожидая владельца"
+
+    def test_the_owner_is_still_called(self, expired):
+        """Молча ждать нельзя: без ключа никто ничего не сделает."""
+        self.run_once(expired)
+
+        assert any("ключ" in text for text in expired["providers"].notifier.alerts)
+
+    def test_it_is_retried_later(self, expired):
+        post = self.run_once(expired)
+
+        assert post.next_attempt_at is not None
+
+    def test_ordinary_failures_still_count(self, watched, monkeypatch):
+        """Обратная половина: обычная поломка обязана расходовать попытки."""
+        from factory.core.errors import FactoryError
+        from factory.core.steps import REGISTRY
+
+        watched["context"](State.APPROVED)
+        monkeypatch.setitem(
+            REGISTRY, State.APPROVED,
+            lambda ctx: (_ for _ in ()).throw(FactoryError("что-то другое")),
+        )
+
+        post = machine.reload_post(watched["conn"], watched["post_id"])
+        machine.advance_post(
+            watched["conn"], post, watched["watched_project"], watched["providers"]
+        )
+
+        assert machine.reload_post(watched["conn"], watched["post_id"]).retry_count == 1
