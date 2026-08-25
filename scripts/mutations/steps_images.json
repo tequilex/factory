@@ -19,7 +19,7 @@
       "        seed=None,"
     ],
     "класть файлы в общий каталог вместо каталога поста": [
-      "    target_dir = paths.post_tmp_dir(ctx.post.id)",
+      "    target_dir = paths.post_tmp_dir(ctx.post.id, ctx.post.version)",
       "    target_dir = paths.tmp_dir()"
     ],
     "копить пути и писать их одной транзакцией в конце шага": [
@@ -33,6 +33,10 @@
     "генерировать всё в один поток, игнорируя пул": [
       "    workers = max(1, min(paths.max_parallel_images(), len(pending)))",
       "    workers = 1"
+    ],
+    "класть все варианты в одну папку": [
+      "    target_dir = paths.post_tmp_dir(ctx.post.id, ctx.post.version)",
+      "    target_dir = paths.post_tmp_dir(ctx.post.id)"
     ]
   }
 }

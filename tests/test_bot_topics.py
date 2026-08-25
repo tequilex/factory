@@ -25,6 +25,7 @@ STRANGER = 111222333
 class FakeMessage:
     text: str = ""
     from_user: object = None
+    message_id: int = 900
     answered: list[str] = field(default_factory=list)
     markups: list[object] = field(default_factory=list)
 
@@ -49,7 +50,7 @@ def bot(pipeline):
         asyncio.run(named(dispatcher, "message", name).callback(message))
         return message
 
-    def press(data: str, user: int = OWNER) -> FakeQuery:
+    def press(data: str = "t:add:900", user: int = OWNER) -> FakeQuery:
         query = FakeQuery(data=data, from_user=FakeUser(user))
         asyncio.run(named(dispatcher, "callback", "on_topics_answer").callback(query))
         return query
@@ -144,7 +145,7 @@ class TestAddingTopics:
     def test_confirming_adds_them(self, bot):
         bot["send"]("on_topics_offer", "Первая тема\nВторая тема")
 
-        bot["press_topics"]("t:add")
+        bot["press_topics"]("t:add:900")
 
         titles = free_titles(bot["conn"], bot["project_id"])
         assert "Первая тема" in titles
@@ -153,7 +154,7 @@ class TestAddingTopics:
     def test_refusing_adds_nothing(self, bot):
         bot["send"]("on_topics_offer", "Первая тема")
 
-        bot["press_topics"]("t:no")
+        bot["press_topics"]("t:no:900")
 
         assert "Первая тема" not in free_titles(bot["conn"], bot["project_id"])
 
@@ -161,7 +162,7 @@ class TestAddingTopics:
         topics.add(bot["conn"], bot["project_id"], ["Уже есть"])
         bot["send"]("on_topics_offer", "Уже есть\nНовая")
 
-        query = bot["press_topics"]("t:add")
+        query = bot["press_topics"]("t:add:900")
 
         assert "Добавлено тем: 1" in query.message.answered[0]
         assert "Пропущено (повторы и пустые): 1" in query.message.answered[0]
@@ -175,7 +176,7 @@ class TestAddingTopics:
         )
         bot["send"]("on_topics_offer", "Новая тема")
 
-        bot["press_topics"]("t:add")
+        bot["press_topics"]("t:add:900")
 
         assert not alerts.is_raised(conn, "no_topics", "demo")
 
@@ -188,7 +189,7 @@ class TestAddingTopics:
     def test_a_stranger_cannot_confirm_someone_elses_list(self, bot):
         bot["send"]("on_topics_offer", "Первая тема")
 
-        query = bot["press_topics"]("t:add", user=STRANGER)
+        query = bot["press_topics"]("t:add:900", user=STRANGER)
 
         assert "Первая тема" not in free_titles(bot["conn"], bot["project_id"])
         assert "не для вас" in query.said, "посторонний не получил ответа"
@@ -202,12 +203,12 @@ class TestAddingTopics:
         одинаковых темы.
         """
         bot["send"]("on_topics_offer", "Первая тема")
-        bot["press_topics"]("t:add")
+        bot["press_topics"]("t:add:900")
         assert bot["conn"].execute(
             "SELECT COUNT(*) FROM meta WHERE key LIKE 'pending_topics:%'"
         ).fetchone()[0] == 0, "список остался висеть после применения"
 
-        bot["press_topics"]("t:add")
+        bot["press_topics"]("t:add:900")
 
         assert free_titles(bot["conn"], bot["project_id"]).count("Первая тема") == 1
 
@@ -295,3 +296,142 @@ class TestRetryFromTheBot:
         conn, post_id = bot["conn"], bot["post_id"]
 
         assert apply(conn, post_id, Decision.RETRY, by=OWNER) is False
+
+    def test_the_button_works_through_the_bot(self, broken):
+        """Проверка всего пути, а не одной функции.
+
+        Класс называется «чинится кнопкой» — значит проверять надо нажатие:
+        права, применение, ответ. Без этого имя теста обещает больше, чем он
+        делает.
+        """
+        query = FakeQuery(
+            data=f"r:{broken['post_id']}:fix", from_user=FakeUser(OWNER)
+        )
+        asyncio.run(named(broken["dispatcher"], "callback", "on_decision").callback(query))
+
+        state = broken["conn"].execute(
+            "SELECT state FROM posts WHERE id = ?", (broken["post_id"],)
+        ).fetchone()["state"]
+        assert state == State.QUEUED
+        assert "снова" in query.message.answered[-1]
+
+    def test_a_stranger_cannot_press_it(self, broken):
+        query = FakeQuery(
+            data=f"r:{broken['post_id']}:fix", from_user=FakeUser(STRANGER)
+        )
+        asyncio.run(named(broken["dispatcher"], "callback", "on_decision").callback(query))
+
+        state = broken["conn"].execute(
+            "SELECT state FROM posts WHERE id = ?", (broken["post_id"],)
+        ).fetchone()["state"]
+        assert state == State.FAILED
+        assert "не для вас" in query.said
+
+
+class TestTheKeyAlwaysReachesTheRightHandler:
+    """Ключ ВК не должен попадать ни в темы, ни в правку текста.
+
+    Оба промаха неприятны одинаково: ключ не сохраняется, остаётся висеть в
+    переписке, а владелец видит бессмысленный ответ вместо продолжения работы.
+    """
+
+    def test_a_bare_key_is_not_taken_for_topics(self, bot):
+        """Голый ключ принимает разборщик — значит и маршрутизация обязана."""
+        message = FakeMessage(text="vk1.a.qwertyuiop1234567890AB", from_user=FakeUser(OWNER))
+
+        assert review_bot._looks_like_a_vk_key(message) is True
+        assert review_bot._not_a_vk_key(message) is False
+
+    def test_a_whole_address_is_recognised(self, bot):
+        message = FakeMessage(
+            text="https://oauth.vk.com/blank.html#access_token=vk1.a.qwertyuiop1234567890AB",
+            from_user=FakeUser(OWNER),
+        )
+
+        assert review_bot._looks_like_a_vk_key(message) is True
+
+    def test_a_topic_list_is_not_mistaken_for_a_key(self, bot):
+        message = FakeMessage(text="Первая тема\nВторая тема", from_user=FakeUser(OWNER))
+
+        assert review_bot._looks_like_a_vk_key(message) is False
+
+    def test_the_key_handler_is_registered_before_the_others(self, bot):
+        """aiogram берёт первый подошедший обработчик.
+
+        Ключ, присланный ответом на сообщение с тревогой (самое естественное
+        действие в телефоне — ответить туда, где ссылка), иначе уходит в правку
+        текста.
+        """
+        names = [
+            getattr(handler.callback, "__name__", "")
+            for handler in bot["dispatcher"].message.handlers
+        ]
+
+        assert names.index("on_vk_token") < names.index("on_edit")
+        assert names.index("on_vk_token") < names.index("on_topics_offer")
+
+
+class TestRetryClearsTheAlarm:
+    def test_a_fixed_post_can_alarm_again(self, bot):
+        """Бот обещает написать ещё раз, если поломка повторится.
+
+        Отметка о тревоге, оставшаяся после починки, делает это обещание
+        невыполнимым: вторая поломка того же поста проходит молча.
+        """
+        conn, post_id = bot["conn"], bot["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET state = ?, last_error = 'сломалось' WHERE id = ?",
+                (State.FAILED, post_id),
+            )
+        alerts.raise_once(
+            conn, bot["providers"].notifier, chat_id=OWNER,
+            name="failed", scope=f"demo:{post_id}", text="сломался",
+        )
+
+        apply(conn, post_id, Decision.RETRY, by=OWNER)
+
+        assert not alerts.is_raised(conn, "failed", f"demo:{post_id}")
+
+    def test_a_rollback_also_forgets_that_the_post_was_stuck(self, bot):
+        """Откатили застрявший пост — о следующем застревании надо сказать заново."""
+        conn, post_id = bot["conn"], bot["post_id"]
+        with db.write_transaction(conn):
+            conn.execute("UPDATE posts SET state = ? WHERE id = ?", (State.IN_REVIEW, post_id))
+        alerts.raise_once(
+            conn, bot["providers"].notifier, chat_id=OWNER,
+            name="stuck", scope=f"demo:{post_id}", text="стоит сутки",
+        )
+
+        apply(conn, post_id, Decision.TEXT, by=OWNER)
+
+        assert not alerts.is_raised(conn, "stuck", f"demo:{post_id}")
+
+
+class TestTwoListsInARow:
+    def test_each_button_adds_its_own_list(self, bot):
+        """Метка едет в кнопке, а не хранится по человеку.
+
+        Иначе второй список затирает первый: кнопка под первым сообщением
+        добавляет чужие темы, а кнопка под вторым отвечает «не добавляю».
+        """
+        first = FakeMessage(text="Первая", from_user=FakeUser(OWNER), message_id=901)
+        second = FakeMessage(text="Вторая", from_user=FakeUser(OWNER), message_id=902)
+        asyncio.run(
+            named(bot["dispatcher"], "message", "on_topics_offer").callback(first)
+        )
+        asyncio.run(
+            named(bot["dispatcher"], "message", "on_topics_offer").callback(second)
+        )
+
+        bot["press_topics"]("t:add:901")
+        bot["press_topics"]("t:add:902")
+
+        titles = free_titles(bot["conn"], bot["project_id"])
+        assert "Первая" in titles
+        assert "Вторая" in titles
+
+    def test_a_broken_button_is_refused(self, bot):
+        query = bot["press_topics"]("t:add")
+
+        assert "испорчена" in query.said

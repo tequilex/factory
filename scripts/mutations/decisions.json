@@ -3,6 +3,7 @@
   "tests": [
     "tests/test_bot_topics.py",
     "tests/test_decisions.py",
+    "tests/test_review_bot.py",
     "tests/test_versions.py"
   ],
   "mutations": {
@@ -107,16 +108,16 @@
       "    Decision.CANCEL: RejectionReason.TRASH,"
     ],
     "откат не заводит новый вариант": [
-      "            version = _next_version(conn, post_id) if decision is not Decision.TRASH else None",
-      "            version = None"
+      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
+      "            fresh = False"
     ],
     "мусор тоже заводит вариант": [
-      "            version = _next_version(conn, post_id) if decision is not Decision.TRASH else None",
-      "            version = _next_version(conn, post_id)"
+      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
+      "            fresh = True"
     ],
     "починка считается одобрением": [
-      "        touches_decision = decision is not Decision.RETRY",
-      "        touches_decision = True"
+      "        touches_decision = decision not in (Decision.RETRY, Decision.CANCEL)",
+      "        touches_decision = decision is not Decision.CANCEL"
     ],
     "починка заводит новый вариант": [
       "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
@@ -125,6 +126,22 @@
     "чинить можно любой пост": [
       "    Decision.RETRY: State.FAILED,",
       "    Decision.RETRY: State.IN_REVIEW,"
+    ],
+    "не снимать тревоги по вернувшемуся в работу посту": [
+      "    _forget_alerts(conn, post_id)",
+      "    pass"
+    ],
+    "отмена засчитывается в счёт одобрений": [
+      "        touches_decision = decision not in (Decision.RETRY, Decision.CANCEL)",
+      "        touches_decision = decision is not Decision.RETRY"
+    ],
+    "не восстанавливать выбранный вариант": [
+      "        if version is not None and decision is Decision.APPROVE:\n            from factory.core.versions import restore_within\n\n            if not restore_within(conn, post_id, version):\n                return False",
+      "        pass"
+    ],
+    "восстанавливать вариант до проверки состояния": [
+      "    with db.write_transaction(conn):\n        # Отмена дополнительно требует, чтобы пост ещё не вышел: успели\n        # опубликовать — отменять уже нечего, надо удалять в самой группе.\n        row = conn.execute(\n            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ? \"\n            \"AND (? != ? OR external_id IS NULL)\",\n            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),\n        ).fetchone()\n        if row is None:\n            return False\n\n        if version is not None and decision is Decision.APPROVE:\n            from factory.core.versions import restore_within\n\n            if not restore_within(conn, post_id, version):\n                return False\n",
+      "    if version is not None and decision is Decision.APPROVE:\n        from factory.core.versions import restore\n\n        if not restore(conn, post_id, version):\n            return False\n\n    with db.write_transaction(conn):\n        row = conn.execute(\n            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ? \"\n            \"AND (? != ? OR external_id IS NULL)\",\n            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),\n        ).fetchone()\n        if row is None:\n            return False\n"
     ]
   }
 }

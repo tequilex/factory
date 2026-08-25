@@ -63,7 +63,7 @@ def raise_once(
     name: str,
     scope: str,
     text: str,
-    keyboard: dict | None = None,
+    fix_post_id: int | None = None,
 ) -> bool:
     """Отправить тревогу, если она ещё не висит. ``True`` — отправили.
 
@@ -74,7 +74,7 @@ def raise_once(
         return False
 
     try:
-        notifier.alert(chat_id=chat_id, text=text, keyboard=keyboard)
+        notifier.alert(chat_id=chat_id, text=text, fix_post_id=fix_post_id)
     except Exception as exc:  # noqa: BLE001 — см. ниже
         # Ловится всё, а не только FactoryError: провайдер отдаёт наружу и
         # httpx.ReadTimeout, а сеть до Telegram отвечает неровно. Уведомление о
@@ -141,9 +141,9 @@ def nothing_to_publish_text(project: str, free_topics: int, in_flight: int) -> s
     return (
         f"⚠️ [{project}] Скоро публиковать будет нечего.\n\n"
         f"Свободных тем: {free_topics}. Постов в работе: {in_flight}.\n\n"
-        "Что сделать: добавить темы.\n"
-        f"  factory topics import {project} темы.txt\n\n"
-        "Файл — по теме в строке."
+        "Что сделать: пришлите мне новые темы одним сообщением, по теме в "
+        "строке. Я переспрошу и добавлю.\n\n"
+        "Посмотреть, что осталось: /topics"
     )
 
 

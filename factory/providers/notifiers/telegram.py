@@ -99,7 +99,7 @@ def _label_for(decision: Decision, version: int) -> str:
     return LABEL[decision]
 
 
-def cancel_keyboard(post_id: int) -> dict:
+def cancel_keyboard(post_id: int, version: int = 1) -> dict:
     """Единственная кнопка под одобренным постом — «передумал».
 
     Убирать клавиатуру совсем нельзя: пост одобрен, но ещё не вышел, и до
@@ -111,7 +111,10 @@ def cancel_keyboard(post_id: int) -> dict:
             [
                 {
                     "text": f"{ICON[Decision.CANCEL]} {LABEL[Decision.CANCEL]}",
-                    "callback_data": f"r:{post_id}:{Decision.CANCEL.value}",
+                    # Номер варианта обязан ехать и здесь: без него отмена
+                    # возвращает клавиатуру первого варианта на сообщение
+                    # третьего, и следующее «Опубликовать» уходит не тем постом.
+                    "callback_data": f"r:{post_id}:{Decision.CANCEL.value}:{version}",
                 }
             ]
         ]
@@ -381,10 +384,10 @@ class TelegramNotifier:
             },
         )
 
-    def alert(self, *, chat_id: int, text: str, keyboard: dict | None = None) -> None:
+    def alert(self, *, chat_id: int, text: str, fix_post_id: int | None = None) -> None:
         data: dict[str, Any] = {"chat_id": chat_id, "text": _cut(text)}
-        if keyboard is not None:
-            data["reply_markup"] = _json(keyboard)
+        if fix_post_id is not None:
+            data["reply_markup"] = _json(retry_keyboard(fix_post_id))
         self._call("sendMessage", data=data)
 
 def _retry_after(payload: dict) -> float | None:

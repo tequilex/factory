@@ -75,6 +75,16 @@ docs/              планы этапов
   спасает: `ctx.post` — снимок, сделанный до первой попытки, и отметка, только
   что записанная в базу, во второй попытке всё ещё пуста. Любой невозвратный
   вызов наружу — `attempts=1` плюс отметка в базе ДО вызова.
+- **Проверка состояния и подмена данных обязаны быть в одной транзакции.**
+  Восстановление варианта делалось до `apply()`, своей транзакцией. Нажатие на
+  кнопку старого сообщения, когда пост уже уехал на переделку, отвергалось — но
+  вариант в базе успевал подмениться, а вместе с ним и папка для следующих
+  картинок. Первый вариант затирался: ровно то, ради предотвращения чего
+  варианты и заведены.
+- **Всё, что несёт номер поста, должно нести и номер варианта.** Кнопка отмены
+  его теряла, и после «передумал» на сообщение возвращалась клавиатура первого
+  варианта — следующее «Опубликовать» уходило не тем постом, без единого
+  признака подмены.
 - **Мутационную проверку нельзя гонять параллельно с тестами.** Она правит
   исходник прямо на диске и восстанавливает его в конце. Обычный `pytest`,
   запущенный в это же время, видит подменённый файл и падает на случайном
@@ -154,15 +164,28 @@ CREATE TABLE posts_new (
     scheduled_at  TEXT,
     external_id   TEXT,
     published_at  TEXT,
+    publish_guid  TEXT,
+    review_chat_id INTEGER,
+    review_message_id INTEGER,
+    review_album_at TEXT,
+    review_album_message_id INTEGER,
+    decided_at    TEXT,
+    decided_by    INTEGER,
+    version       INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
 
 -- Перечислять колонки явно: SELECT * сломается при следующем изменении схемы.
+-- Список должен совпадать с текущей схемой: проверить `PRAGMA table_info(posts)`
+-- перед копированием. Один пропущенный `publish_guid` — и снимается слой защиты
+-- от второго поста в группе.
 INSERT INTO posts_new SELECT
     id, project_id, topic_id, idem_key, state, title, body, question,
     factcheck_verdict, factcheck_notes, retry_count, last_error, next_attempt_at,
-    scheduled_at, external_id, published_at, created_at, updated_at
+    scheduled_at, external_id, published_at, publish_guid,
+    review_chat_id, review_message_id, review_album_at, review_album_message_id,
+    decided_at, decided_by, version, created_at, updated_at
 FROM posts;
 
 DROP TABLE posts;

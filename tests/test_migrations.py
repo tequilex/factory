@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "comments",
     "runs",
     "rejections",
+    "post_versions",
     "meta",
 }
 
@@ -30,7 +31,11 @@ def table_names(conn: sqlite3.Connection) -> set[str]:
 
 
 def test_all_tables_are_created(conn):
-    assert EXPECTED_TABLES <= table_names(conn)
+    # Подмножеством: миграции могут завести служебную таблицу, о которой этот
+    # тест знать не обязан. Но каждая ожидаемая обязана быть — проверяется
+    # поимённо, чтобы пропажа не растворилась в сравнении множеств.
+    missing = EXPECTED_TABLES - table_names(conn)
+    assert not missing, f"пропали таблицы: {sorted(missing)}"
 
 
 def test_schema_version_is_recorded(conn):
@@ -237,7 +242,8 @@ class TestMigrationDiscovery:
             db.migrate(conn, tmp_path)
 
         assert db.schema_version(conn) == EXPECTED_SCHEMA_VERSION
-        assert EXPECTED_TABLES <= table_names(conn)
+        # Схема цела: сломанная миграция не должна была ничего снести.
+        assert not EXPECTED_TABLES - table_names(conn)
 
 
 class TestConnect:

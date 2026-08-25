@@ -79,11 +79,23 @@ def record(conn: sqlite3.Connection, post: Post) -> int:
 
 
 def restore(conn: sqlite3.Connection, post_id: int, number: int) -> bool:
-    """Сделать указанный вариант текущим. ``False`` — такого варианта нет.
+    """Сделать указанный вариант текущим, своей транзакцией."""
+    with db.write_transaction(conn):
+        return restore_within(conn, post_id, number)
+
+
+def restore_within(conn: sqlite3.Connection, post_id: int, number: int) -> bool:
+    """То же, но внутри уже открытой транзакции. ``False`` — варианта нет.
+
+    Отдельная функция нужна, потому что восстановление обязано происходить под
+    той же проверкой состояния, что и само решение. Иначе получается так:
+    владелец жмёт «Опубликовать этот вариант» на старом сообщении, пост к тому
+    времени уже уехал на переделку, решение не применяется — а вариант в базе
+    уже подменён. Дальше картинки нового варианта лягут поверх файлов старого,
+    и оба будут потеряны.
 
     Восстанавливается всё, по чему принималось решение: текст, промпты, seed'ы и
-    пути к картинкам. Файлы при этом не трогаются — они лежат по подпапкам
-    номеров и никуда не девались.
+    пути к картинкам. Файлы не трогаются — они лежат по подпапкам номеров.
     """
     row = conn.execute(
         "SELECT * FROM post_versions WHERE post_id = ? AND number = ?", (post_id, number)
@@ -94,24 +106,31 @@ def restore(conn: sqlite3.Connection, post_id: int, number: int) -> bool:
     saved = json.loads(row["assets"] or "[]")
     stamp = to_iso(now_utc())
 
-    with db.write_transaction(conn):
+    conn.execute(
+        "UPDATE posts SET title = ?, body = ?, question = ?, factcheck_verdict = ?, "
+        "factcheck_notes = ?, version = ?, updated_at = ? WHERE id = ?",
+        (
+            row["title"], row["body"], row["question"], row["factcheck_verdict"],
+            row["factcheck_notes"], number, stamp, post_id,
+        ),
+    )
+
+    # Картинок у варианта может быть больше или меньше, чем строк сейчас: сцены
+    # удаляются откатом и создаются заново. Лишние строки, оставшиеся от другого
+    # варианта, надо погасить, иначе в пост уедет чужая картинка.
+    conn.execute(
+        "UPDATE assets SET local_path = NULL, external_ref = NULL WHERE post_id = ?",
+        (post_id,),
+    )
+    for item in saved:
         conn.execute(
-            "UPDATE posts SET title = ?, body = ?, question = ?, factcheck_verdict = ?, "
-            "factcheck_notes = ?, version = ?, updated_at = ? WHERE id = ?",
+            "UPDATE assets SET prompt = ?, seed = ?, local_path = ?, external_ref = ? "
+            "WHERE post_id = ? AND kind = ? AND position = ?",
             (
-                row["title"], row["body"], row["question"], row["factcheck_verdict"],
-                row["factcheck_notes"], number, stamp, post_id,
+                item["prompt"], item["seed"], item["local_path"], item["external_ref"],
+                post_id, item["kind"], item["position"],
             ),
         )
-        for item in saved:
-            conn.execute(
-                "UPDATE assets SET prompt = ?, seed = ?, local_path = ?, external_ref = ? "
-                "WHERE post_id = ? AND kind = ? AND position = ?",
-                (
-                    item["prompt"], item["seed"], item["local_path"], item["external_ref"],
-                    post_id, item["kind"], item["position"],
-                ),
-            )
 
     log.info("вариант восстановлен", extra={"post_id": post_id, "f_number": number})
     return True

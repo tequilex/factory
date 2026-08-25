@@ -112,7 +112,14 @@ class Notifier(Protocol):
         """Пост вышел: снять кнопку отмены и показать ссылку."""
         ...
 
-    def alert(self, *, chat_id: int, text: str, keyboard: dict | None = None) -> None: ...
+    def alert(self, *, chat_id: int, text: str, fix_post_id: int | None = None) -> None:
+        """Тревога владельцу.
+
+        ``fix_post_id`` — попросить кнопку «Попробовать снова» для этого поста.
+        Ядро называет смысл, разметку кнопки строит провайдер: клавиатуры Bot
+        API в ``core/`` быть не должно.
+        """
+        ...
 
 
 @runtime_checkable

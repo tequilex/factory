@@ -1,6 +1,9 @@
 {
   "module": "factory/core/versions.py",
-  "tests": ["tests/test_versions.py", "tests/test_review_bot.py"],
+  "tests": [
+    "tests/test_versions.py",
+    "tests/test_review_bot.py"
+  ],
   "mutations": {
     "не сохранять промпты и картинки варианта": [
       "                json.dumps(_assets_of(conn, post.id), ensure_ascii=False),",
@@ -11,16 +14,16 @@
       "            \"ON CONFLICT(post_id, number) DO NOTHING \" \"-- \""
     ],
     "не восстанавливать текст варианта": [
-      "                row[\"title\"], row[\"body\"], row[\"question\"], row[\"factcheck_verdict\"],",
-      "                row[\"title\"], \"\", row[\"question\"], row[\"factcheck_verdict\"],"
+      "            row[\"title\"], row[\"body\"], row[\"question\"], row[\"factcheck_verdict\"],",
+      "            row[\"title\"], \"\", row[\"question\"], row[\"factcheck_verdict\"],"
     ],
     "не восстанавливать картинки варианта": [
-      "        for item in saved:\n            conn.execute(",
-      "        for item in []:\n            conn.execute("
+      "    for item in saved:",
+      "    for item in []:"
     ],
     "не переключать текущий номер при восстановлении": [
-      "                row[\"factcheck_notes\"], number, stamp, post_id,",
-      "                row[\"factcheck_notes\"], 1, stamp, post_id,"
+      "            row[\"factcheck_notes\"], number, stamp, post_id,",
+      "            row[\"factcheck_notes\"], 1, stamp, post_id,"
     ],
     "молча соглашаться на несуществующий вариант": [
       "    if row is None:\n        return False",
@@ -37,6 +40,10 @@
     "считать варианты всех постов сразу": [
       "        \"SELECT COUNT(*) FROM post_versions WHERE post_id = ?\", (post_id,)",
       "        \"SELECT COUNT(*) FROM post_versions WHERE ? IS NOT NULL\", (post_id,)"
+    ],
+    "оставлять картинки чужого варианта": [
+      "    conn.execute(\n        \"UPDATE assets SET local_path = NULL, external_ref = NULL WHERE post_id = ?\",\n        (post_id,),\n    )",
+      "    pass"
     ]
   }
 }

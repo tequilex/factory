@@ -237,3 +237,61 @@ class TestWhatTheOwnerSees:
         last = ctx.providers.notifier.sent[-1]
         assert last["version"] == 2
         assert last["total"] == 2
+
+
+class TestTrashedPostsDoNotPileUp:
+    def test_the_files_of_all_variants_are_removed(self, asking):
+        """Чистка висела только на публикации, а выброшенный пост не выходит.
+
+        С вариантами это стало заметно: каждый откат оставляет ещё одну папку
+        с картинками, и они копились бы на диске вечно.
+        """
+        conn, post_id = asking["conn"], asking["post_id"]
+        asking["to_review"]()
+        apply(conn, post_id, Decision.IMAGES)
+        asking["to_review"]()
+        assert paths.post_tmp_dir(post_id, 1).is_dir()
+        assert paths.post_tmp_dir(post_id, 2).is_dir()
+
+        apply(conn, post_id, Decision.TRASH)
+
+        assert not paths.post_tmp_dir(post_id).exists()
+
+    def test_a_rollback_keeps_the_files(self, asking):
+        """Обратная половина: откат обязан сохранить прежний вариант на диске."""
+        conn, post_id = asking["conn"], asking["post_id"]
+        asking["to_review"]()
+
+        apply(conn, post_id, Decision.TEXT)
+
+        assert paths.post_tmp_dir(post_id, 1).is_dir()
+
+
+class TestRestoringCleansForeignImages:
+    def test_extra_images_of_another_variant_are_dropped(self, asking):
+        """У вариантов может быть разное число картинок.
+
+        Строки, оставшиеся от другого варианта, иначе уедут в пост чужой
+        картинкой — а владелец решал по тем, что видел.
+        """
+        conn, post_id = asking["conn"], asking["post_id"]
+        asking["to_review"]()
+
+        # У первого варианта одна картинка вместо четырёх.
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE post_versions SET assets = ? WHERE post_id = ? AND number = 1",
+                (
+                    json.dumps([
+                        {"kind": "cover", "position": 0, "prompt": "p", "seed": 1,
+                         "local_path": "/тот/самый.png", "external_ref": None}
+                    ]),
+                    post_id,
+                ),
+            )
+
+        versions.restore(conn, post_id, 1)
+
+        rows = assets_of(conn, post_id)
+        assert rows[0]["local_path"] == "/тот/самый.png"
+        assert all(row["local_path"] is None for row in rows[1:]), "остались чужие картинки"

@@ -23,7 +23,7 @@ class StubNotifier:
     sent: list[dict] = field(default_factory=list)
     albums: list[dict] = field(default_factory=list)
     finished: list[dict] = field(default_factory=list)
-    alert_keyboards: list[dict | None] = field(default_factory=list)
+    alert_fix_posts: list[int | None] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     _next_message_id: int = 1000
 
@@ -67,7 +67,7 @@ class StubNotifier:
     def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
         self.finished.append({"chat_id": chat_id, "message_id": message_id, "text": text})
 
-    def alert(self, *, chat_id: int, text: str, keyboard: dict | None = None) -> None:
+    def alert(self, *, chat_id: int, text: str, fix_post_id: int | None = None) -> None:
         self.alerts.append(text)
-        self.alert_keyboards.append(keyboard)
+        self.alert_fix_posts.append(fix_post_id)
         log.info("тревога не отправлена: заглушка", extra={"text": text[:120]})

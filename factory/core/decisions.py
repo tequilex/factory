@@ -157,12 +157,18 @@ def apply(
     decision: Decision,
     *,
     by: int | None = None,
+    version: int | None = None,
 ) -> bool:
-    """Применить решение. ``False`` — пост уже не в ревью, ничего не изменено.
+    """Применить решение. ``False`` — решение неприменимо, ничего не изменено.
 
     Всё одной транзакцией: снимок, очистка, смена состояния, возврат темы.
     Половина применённого решения хуже неприменённого — пост с пустым текстом
     в состоянии ``in_review`` не двинется ни в одну сторону.
+
+    ``version`` — номер варианта, под которым нажали. Он восстанавливается
+    здесь же, под той же проверкой состояния: снаружи это давало дыру, при
+    которой отклонённое решение всё равно подменяло содержимое поста, а вместе
+    с ним и папку, куда лягут следующие картинки.
     """
     target = TARGET_STATE[decision]
     reason = REJECTION_REASON[decision]
@@ -178,6 +184,12 @@ def apply(
         ).fetchone()
         if row is None:
             return False
+
+        if version is not None and decision is Decision.APPROVE:
+            from factory.core.versions import restore_within
+
+            if not restore_within(conn, post_id, version):
+                return False
 
         if reason is not None:
             conn.execute(
@@ -201,16 +213,25 @@ def apply(
         # decided_at у починки не ставится: это не решение о содержании, а
         # «попробуй ещё раз». Проставить его значило бы засчитать сломанный пост
         # в счёт одобрений подряд и приблизить автопубликацию без ревью.
-        touches_decision = decision is not Decision.RETRY
+        touches_decision = decision not in (Decision.RETRY, Decision.CANCEL)
 
         if decision in (Decision.APPROVE, Decision.CANCEL):
             # Сообщение остаётся тем же: с него владелец отменяет публикацию,
             # если передумал, и на нём же появится ссылка на вышедший пост.
+            #
+            # У отмены decided_at не ставится: решения по посту снова нет, а
+            # непустая метка засчитала бы его в «одобрено подряд без правок» и
+            # приблизила автопубликацию без ревью.
             conn.execute(
                 "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
                 "next_attempt_at = NULL, decided_at = ?, decided_by = ?, updated_at = ? "
                 "WHERE id = ?",
-                (target, stamp, by, stamp, post_id),
+                (
+                    target,
+                    stamp if touches_decision else None,
+                    by if touches_decision else None,
+                    stamp, post_id,
+                ),
             )
         else:
             # Откат — это заявка на новый вариант, а не правка нынешнего.
@@ -238,11 +259,57 @@ def apply(
                 ),
             )
 
+    if decision is Decision.TRASH:
+        # Выброшенный пост никогда не опубликуется, а чистка файлов висела
+        # только на публикации. С вариантами это стало заметно: каждый откат
+        # оставляет ещё одну папку с картинками.
+        _forget_files(post_id)
+
+    _forget_alerts(conn, post_id)
+
     log.info(
         "решение владельца применено",
         extra={"post_id": post_id, "decision": str(decision), "state": str(target), "by": by},
     )
     return True
+
+
+def _forget_files(post_id: int) -> None:
+    """Удалить картинки поста. Сбой здесь только логируется.
+
+    Решение уже применено и записано; отказаться от него из-за неудалённого
+    файла было бы куда хуже, чем оставить файл на диске.
+    """
+    import shutil
+
+    from factory.core import paths
+
+    try:
+        shutil.rmtree(paths.post_tmp_dir(post_id))
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # noqa: BLE001 — диск не повод отменять решение
+        log.warning("не удалось убрать картинки", extra={"post_id": post_id, "reason": str(exc)})
+
+
+def _forget_alerts(conn: sqlite3.Connection, post_id: int) -> None:
+    """Снять тревоги по посту: он снова в работе, и всё начинается заново.
+
+    Без этого «Попробовать снова» чинит пост один раз: отметка о поломке
+    остаётся висеть, и вторая поломка того же поста проходит молча. Бот при
+    этом прямо обещает написать ещё раз — то есть обещание не выполняется.
+    То же с застрявшим постом, который откатили.
+    """
+    from factory.core import alerts
+
+    row = conn.execute(
+        "SELECT p.slug FROM projects p JOIN posts o ON o.project_id = p.id WHERE o.id = ?",
+        (post_id,),
+    ).fetchone()
+    if row is None:
+        return
+    for name in ("failed", "stuck"):
+        alerts.clear(conn, name, f"{row['slug']}:{post_id}")
 
 
 def approvals_in_a_row(conn: sqlite3.Connection, project_id: int) -> int:

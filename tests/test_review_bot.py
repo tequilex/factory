@@ -514,11 +514,42 @@ class TestPublishingAnOldVariant:
         row = conn.execute("SELECT body FROM posts WHERE id = ?", (post_id,)).fetchone()
         assert row["body"] == "второй вариант текста"
 
-    def test_a_variant_that_no_longer_exists_is_explained(self, two_variants):
-        query = two_variants["press"](f"r:{two_variants['post_id']}:ok:99")
+    def test_a_variant_that_no_longer_exists_changes_nothing(self, two_variants):
+        """Решение не применяется целиком, а не наполовину.
 
-        assert "недоступен" in query.said
+        Раньше вариант восстанавливался до проверки состояния: отклонённое
+        решение всё равно подменяло текст поста и номер варианта, а вместе с ним
+        и папку, куда лягут следующие картинки. Первый вариант при этом
+        затирался — то самое, ради предотвращения чего варианты и заведены.
+        """
+        conn, post_id = two_variants["conn"], two_variants["post_id"]
+        before = conn.execute(
+            "SELECT body, version FROM posts WHERE id = ?", (post_id,)
+        ).fetchone()
+
+        query = two_variants["press"](f"r:{post_id}:ok:99")
+
         assert state_of(two_variants) == State.IN_REVIEW
+        after = conn.execute(
+            "SELECT body, version FROM posts WHERE id = ?", (post_id,)
+        ).fetchone()
+        assert (after["body"], after["version"]) == (before["body"], before["version"])
+        assert query.said, "владельцу не сказали, что нажатие не сработало"
+
+    def test_a_press_on_a_post_that_moved_on_does_not_restore_anything(self, two_variants):
+        """Кнопка живёт на старых сообщениях вечно и однажды будет нажата поздно."""
+        conn, post_id = two_variants["conn"], two_variants["post_id"]
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET state = ?, body = ? WHERE id = ?",
+                (State.QUEUED, "уже переделывается", post_id),
+            )
+
+        two_variants["press"](f"r:{post_id}:ok:1")
+
+        row = conn.execute("SELECT body, version FROM posts WHERE id = ?", (post_id,)).fetchone()
+        assert row["body"] == "уже переделывается", "вариант подменили вопреки состоянию"
+        assert row["version"] == 2
 
     def test_an_old_button_without_a_variant_still_works(self, bot_env):
         """Сообщения живут в переписке неделями и переживают обновления."""

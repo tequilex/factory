@@ -1050,3 +1050,20 @@ class TestPublishClosesTheLoop:
 
         assert result.advanced
         assert post_row(approved["conn"], approved["post_id"])["external_id"]
+
+
+class TestCancelDoesNotCountAsApproval:
+    def test_a_cancelled_post_is_not_an_approval(self, in_review):
+        """Отмена возвращает пост к решению — решения по нему снова нет.
+
+        Непустая метка засчитала бы его в «одобрено подряд без правок» и
+        приблизила автопубликацию без ревью: система решила бы, что заслужила
+        доверие, на постах, по которым владелец передумал.
+        """
+        conn, post_id = in_review["conn"], in_review["post_id"]
+        apply(conn, post_id, Decision.APPROVE)
+        assert approvals_in_a_row(conn, in_review["project_id"]) == 1
+
+        apply(conn, post_id, Decision.CANCEL)
+
+        assert approvals_in_a_row(conn, in_review["project_id"]) == 0

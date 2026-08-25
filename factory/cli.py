@@ -412,6 +412,10 @@ def post_show(post_id: int) -> None:
     slug = conn.execute(
         "SELECT slug FROM projects WHERE id = ?", (row["project_id"],)
     ).fetchone()["slug"]
+    conn_versions = conn.execute(
+        "SELECT number, title FROM post_versions WHERE post_id = ? ORDER BY number",
+        (post_id,),
+    ).fetchall()
     conn.close()
 
     tz = None
@@ -446,6 +450,13 @@ def post_show(post_id: int) -> None:
         else:
             mark = "ФАЙЛ ПРОПАЛ"
         typer.echo(f"  {asset['kind']:7} {asset['position']}  {mark:24} {path or ''}")
+    variants = conn_versions
+    if variants:
+        typer.echo("Варианты:")
+        for item in variants:
+            mark = " ← текущий" if item["number"] == post.version else ""
+            typer.echo(f"  {item['number']}  {(item['title'] or '')[:50]}{mark}")
+
     typer.echo(f"Потрачено: {cost:.4f} {currency}".rstrip())
     if post.external_id:
         typer.echo(f"Опубликован: {when(post.published_at)}, номер {post.external_id}")

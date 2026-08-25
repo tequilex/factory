@@ -85,7 +85,11 @@ class TestNothingToPublish:
         (message,) = watched["check"]()
 
         assert "публиковать будет нечего" in message
-        assert "factory topics import demo" in message
+        # Это единственное сообщение, где владельцу надо действовать. Команда
+        # для терминала в нём — инструкция, которую он выполнить не может:
+        # он в телефоне, и темы бот умеет принимать сообщением.
+        assert "factory" not in message
+        assert "пришлите" in message
 
     def test_it_does_not_repeat_every_tick(self, watched):
         """Тик идёт раз в минуту — повтор превратил бы это в поток."""
@@ -186,10 +190,9 @@ class TestFailedPosts:
         # Раньше здесь стояла команда для терминала — то есть владельцу,
         # который живёт в телефоне, предлагалось сделать невозможное.
         assert "кнопкой ниже" in message
-        keyboard = watched["providers"].notifier.alert_keyboards[-1]
-        assert keyboard is not None, "кнопки починки не пришло"
-        button = keyboard["inline_keyboard"][0][0]
-        assert button["callback_data"] == f"r:{watched['post_id']}:fix"
+        assert watched["providers"].notifier.alert_fix_posts[-1] == watched["post_id"], (
+            "кнопки починки не пришло"
+        )
 
     def test_it_is_reported_once(self, watched):
         with db.write_transaction(watched["conn"]):

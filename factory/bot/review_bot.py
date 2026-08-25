@@ -76,6 +76,27 @@ def _refusal(conn: sqlite3.Connection, post_id: int, decision: Decision) -> str:
     return ALREADY_DONE
 
 
+def _looks_like_a_vk_key(message: Message) -> bool:
+    """Есть ли в сообщении ключ ВК.
+
+    Проверка тем же разборщиком, которым ключ потом достают, а не поиском
+    подстроки «access_token=». Подстрока промахивалась на голом ключе — том
+    самом, который разборщик принимает и о котором прямо сказано в подсказке
+    владельцу.
+    """
+    return extract_vk_token(message.text or "") is not None
+
+
+def _not_a_vk_key(message: Message) -> bool:
+    """Обратное к :func:`_looks_like_a_vk_key`.
+
+    Отдельной функцией, а не через `~`: обычную функцию aiogram принимает как
+    фильтр, но отрицать её оператором нельзя — это работает только с его
+    собственными объектами.
+    """
+    return not _looks_like_a_vk_key(message)
+
+
 def _projects() -> dict[str, ProjectConfig]:
     """Конфиги всех проектов, у которых получилось загрузиться.
 
@@ -155,12 +176,25 @@ def build_dispatcher(
     async def on_topics_answer(query: CallbackQuery) -> None:
         await _apply_pending_topics(conn, current(), query)
 
+    @dispatcher.message(_looks_like_a_vk_key)
+    async def on_vk_token(message: Message) -> None:
+        """Ключ ВК ловится раньше всех остальных обработчиков.
+
+        Иначе он уходит не туда, и оба промаха неприятны: голый ключ без
+        адреса выглядел как список тем и становился темой поста, а ключ,
+        присланный ответом на сообщение с тревогой (самое естественное
+        действие в телефоне — ответить на то сообщение, где ссылка), уходил
+        в правку текста. В обоих случаях ключ не сохранялся и оставался
+        висеть в переписке.
+        """
+        await _accept_vk_token(conn, current(), message)
+
     @dispatcher.message(F.reply_to_message)
     async def on_edit(message: Message) -> None:
         """Ответ на сообщение поста — это исправленный текст."""
         await _accept_edit(conn, current(), message)
 
-    @dispatcher.message(F.text & ~F.text.startswith("/") & ~F.text.contains("access_token="))
+    @dispatcher.message(F.text & ~F.text.startswith("/"), _not_a_vk_key)
     async def on_topics_offer(message: Message) -> None:
         """Обычное сообщение — это, скорее всего, список тем.
 
@@ -172,16 +206,6 @@ def build_dispatcher(
         через /topics.
         """
         await _offer_topics(conn, current(), message)
-
-    @dispatcher.message(F.text.contains("access_token="))
-    async def on_vk_token(message: Message) -> None:
-        """Владелец прислал адрес после входа в ВК — вынуть ключ и сохранить.
-
-        Принимается и целый адрес из строки браузера, и один ключ: просить
-        человека вырезать подстроку из длинного адреса на телефоне — верный
-        способ получить ключ, обрезанный на символ.
-        """
-        await _accept_vk_token(conn, current(), message)
 
     @dispatcher.callback_query(F.data.startswith("r:"))
     async def on_decision(query: CallbackQuery) -> None:
@@ -203,16 +227,10 @@ def build_dispatcher(
             return
 
         # Одобряют тот вариант, под которым нажали, а не последний сделанный.
-        # Иначе выбор между вариантами не значил бы ничего: в группу всё равно
-        # уходил бы самый свежий.
-        if decision is Decision.APPROVE and version is not None:
-            if not versions.restore(conn, post_id, version):
-                await query.answer(
-                    "Этот вариант больше недоступен.", show_alert=True
-                )
-                return
-
-        if not apply(conn, post_id, decision, by=query.from_user.id):
+        # Восстановление делает apply() под своей проверкой состояния: снаружи
+        # это давало дыру, при которой отклонённое решение всё равно подменяло
+        # содержимое поста.
+        if not apply(conn, post_id, decision, by=query.from_user.id, version=version):
             await query.answer(
                 _refusal(conn, post_id, decision), show_alert=True
             )
@@ -344,8 +362,14 @@ def _switch(
     return f"▶️ Продолжаем: {names}."
 
 
-def _pending_key(user_id: int) -> str:
-    return f"pending_topics:{user_id}"
+def _pending_key(marker: int | str) -> str:
+    """Ключ по сообщению, а не по человеку.
+
+    Два списка подряд иначе накладываются: второй затирает первый, кнопка под
+    первым сообщением добавляет темы из второго, а кнопка под вторым отвечает
+    «не добавляю».
+    """
+    return f"pending_topics:{marker}"
 
 
 async def _offer_topics(
@@ -365,12 +389,19 @@ async def _offer_topics(
 
     slug = mine[0][0]
     stamp = _iso(_now())
+    # Метка едет в самой кнопке: иначе два списка подряд накладываются, и
+    # кнопка под первым сообщением добавляет темы из второго.
+    marker = message.message_id
     with db.write_transaction(conn):
         conn.execute(
             "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
             "updated_at = excluded.updated_at",
-            (_pending_key(message.from_user.id), json.dumps({"slug": slug, "lines": lines}), stamp),
+            (
+                _pending_key(marker),
+                json.dumps({"slug": slug, "lines": lines}),
+                stamp,
+            ),
         )
 
     preview = "\n".join(f"• {line}" for line in lines[:5])
@@ -381,8 +412,8 @@ async def _offer_topics(
             {
                 "inline_keyboard": [
                     [
-                        {"text": "✅ Добавить", "callback_data": "t:add"},
-                        {"text": "✖️ Не надо", "callback_data": "t:no"},
+                        {"text": "✅ Добавить", "callback_data": f"t:add:{marker}"},
+                        {"text": "✖️ Не надо", "callback_data": f"t:no:{marker}"},
                     ]
                 ]
             }
@@ -404,14 +435,19 @@ async def _apply_pending_topics(
         await query.answer(NOT_YOURS, show_alert=True)
         return
 
-    key = _pending_key(query.from_user.id)
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Кнопка испорчена.", show_alert=True)
+        return
+
+    key = _pending_key(parts[2])
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     with db.write_transaction(conn):
         conn.execute("DELETE FROM meta WHERE key = ?", (key,))
 
     await _drop_keyboard(query)
 
-    if query.data == "t:no" or row is None:
+    if parts[1] == "no" or row is None:
         await query.answer("Не добавляю.")
         return
 
@@ -496,7 +532,7 @@ async def _replace_keyboard(
     """
     markup = None
     if decision is Decision.APPROVE:
-        markup = _as_markup(cancel_keyboard(post_id))
+        markup = _as_markup(cancel_keyboard(post_id, version))
     elif decision is Decision.CANCEL:
         markup = _as_markup(review_keyboard(post_id, version))
     elif decision in (Decision.TEXT, Decision.SCENES, Decision.IMAGES):
@@ -546,6 +582,14 @@ def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug
             "✅ Пост одобрен, но выйти сейчас не может: ключ загрузки картинок "
             "в ВК истёк.\n\nПришлите мне новый — пост уедет сам, повторно "
             "нажимать не нужно." + tail
+        )
+
+    if topics.is_paused(conn, slug):
+        # Проект на паузе: тик его не видит, и обещать час публикации значит
+        # опровергать собственное сообщение о паузе.
+        return (
+            "✅ Пост одобрен, но выпуск на паузе — он подождёт.\n\n"
+            "Продолжить: /resume"
         )
 
     if paths.ignore_schedule():
