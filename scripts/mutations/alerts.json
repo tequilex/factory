@@ -1,0 +1,50 @@
+{
+  "module": "factory/core/machine.py",
+  "tests": ["tests/test_alerts.py", "tests/test_queue.py"],
+  "mutations": {
+    "тревожить, пока постов ещё хватает": [
+      "    hopeless = free == 0 and working < config.limits.posts_per_day",
+      "    hopeless = free == 0"
+    ],
+    "молчать, когда публиковать нечем": [
+      "    hopeless = free == 0 and working < config.limits.posts_per_day",
+      "    hopeless = False"
+    ],
+    "не снимать тревогу, когда темы появились": [
+      "    if not hopeless:\n        alerts.clear(conn, \"no_topics\", config.slug)\n        return",
+      "    if not hopeless:\n        return"
+    ],
+    "считать застрявшими свежие посты": [
+      "    threshold = to_iso(now_utc() - timedelta(hours=alerts.STUCK_AFTER_HOURS))",
+      "    threshold = to_iso(now_utc())"
+    ],
+    "никогда не считать пост застрявшим": [
+      "        f\"AND state NOT IN ({placeholders}) AND updated_at <= ? ORDER BY id\",",
+      "        f\"AND state NOT IN ({placeholders}) AND updated_at <= ? AND 1 = 0 ORDER BY id\","
+    ],
+    "тревожить о завершённых постах": [
+      "        f\"AND state NOT IN ({placeholders}) AND updated_at <= ? ORDER BY id\",",
+      "        f\"AND state IN ({placeholders}) AND updated_at <= ? ORDER BY id\","
+    ],
+    "убивать застрявший пост вместо уведомления": [
+      "    for row in rows:\n        alerts.raise_once(\n            conn, providers.notifier, chat_id=chat_id,\n            name=\"stuck\", scope=f\"{config.slug}:{row['id']}\",",
+      "    for row in rows:\n        conn.execute(\"UPDATE posts SET state = 'failed' WHERE id = ?\", (row['id'],))\n        alerts.raise_once(\n            conn, providers.notifier, chat_id=chat_id,\n            name=\"stuck\", scope=f\"{config.slug}:{row['id']}\","
+    ],
+    "одна тревога на все застрявшие посты": [
+      "            name=\"stuck\", scope=f\"{config.slug}:{row['id']}\",",
+      "            name=\"stuck\", scope=config.slug,"
+    ],
+    "одна тревога на все сломанные посты": [
+      "            name=\"failed\", scope=f\"{config.slug}:{row['id']}\",",
+      "            name=\"failed\", scope=config.slug,"
+    ],
+    "не сообщать причину поломки": [
+      "            text=alerts.failed_post_text(\n                config.slug, row[\"id\"], row[\"title\"], row[\"last_error\"]\n            ),",
+      "            text=alerts.failed_post_text(\n                config.slug, row[\"id\"], row[\"title\"], None\n            ),"
+    ],
+    "тревожить проекты без telegram": [
+      "    if config.telegram is None:\n        return",
+      "    if config.telegram is None:\n        pass"
+    ]
+  }
+}

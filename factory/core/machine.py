@@ -317,6 +317,91 @@ def _alert_if_hopeless(conn: sqlite3.Connection, config, providers, exc: BaseExc
     )
 
 
+def _free_topics(conn: sqlite3.Connection, project_id: int) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM topics WHERE project_id = ? AND status = ?",
+        (project_id, TopicStatus.FREE),
+    ).fetchone()[0]
+
+
+def check_alerts(conn: sqlite3.Connection, project, config, providers) -> None:
+    """Позвать владельца, если система встала и сама не выберется.
+
+    Вызывается раз в тик на проект. Каждая тревога звучит один раз и снимается,
+    когда причина исчезла: тик идёт раз в минуту, и без этого получился бы поток
+    одинаковых сообщений, который перестают читать за час.
+
+    Тревоги на «N постов ждут ревью» тут намеренно нет — это нормальная работа,
+    а не авария, и именно так и появляется шум.
+    """
+    if config.telegram is None:
+        return
+
+    chat_id = config.telegram.chat_id
+    _alert_nothing_to_publish(conn, project, config, providers, chat_id)
+    _alert_stuck_posts(conn, project, config, providers, chat_id)
+    _alert_failed_posts(conn, project, config, providers, chat_id)
+
+
+def _alert_nothing_to_publish(conn, project, config, providers, chat_id: int) -> None:
+    free = _free_topics(conn, project.id)
+    working = in_flight(conn, project.id)
+
+    # Тревога не на «темы кончились», а на «постов в работе меньше, чем система
+    # выпускает за сутки». Пока запас есть, кончившиеся темы — не срочность.
+    hopeless = free == 0 and working < config.limits.posts_per_day
+
+    if not hopeless:
+        alerts.clear(conn, "no_topics", config.slug)
+        return
+
+    alerts.raise_once(
+        conn, providers.notifier, chat_id=chat_id, name="no_topics", scope=config.slug,
+        text=alerts.nothing_to_publish_text(config.slug, free, working),
+    )
+
+
+def _alert_stuck_posts(conn, project, config, providers, chat_id: int) -> None:
+    """Пост, простоявший на одном месте дольше суток.
+
+    В ``failed`` такой пост не переводится: ожидание человека это не ошибка, и
+    убивать по таймауту пост, который владелец просто не успел посмотреть, —
+    худшее, что можно сделать.
+    """
+    threshold = to_iso(now_utc() - timedelta(hours=alerts.STUCK_AFTER_HOURS))
+    placeholders = ", ".join("?" for _ in TERMINAL_STATES)
+    rows = conn.execute(
+        f"SELECT id, state, title FROM posts WHERE project_id = ? "
+        f"AND state NOT IN ({placeholders}) AND updated_at <= ? ORDER BY id",
+        (project.id, *sorted(TERMINAL_STATES), threshold),
+    ).fetchall()
+
+    for row in rows:
+        alerts.raise_once(
+            conn, providers.notifier, chat_id=chat_id,
+            name="stuck", scope=f"{config.slug}:{row['id']}",
+            text=alerts.stuck_post_text(
+                config.slug, row["id"], row["state"], alerts.STUCK_AFTER_HOURS, row["title"]
+            ),
+        )
+
+
+def _alert_failed_posts(conn, project, config, providers, chat_id: int) -> None:
+    rows = conn.execute(
+        "SELECT id, title, last_error FROM posts WHERE project_id = ? AND state = ? ORDER BY id",
+        (project.id, State.FAILED),
+    ).fetchall()
+
+    for row in rows:
+        alerts.raise_once(
+            conn, providers.notifier, chat_id=chat_id,
+            name="failed", scope=f"{config.slug}:{row['id']}",
+            text=alerts.failed_post_text(
+                config.slug, row["id"], row["title"], row["last_error"]
+            ),
+        )
+
+
 def tick(conn: sqlite3.Connection) -> dict:
     """One pass over everything. Returns a small summary for the CLI and tests."""
     summary = {"projects": 0, "posts_created": 0, "advanced": 0, "skipped": False}
@@ -352,6 +437,16 @@ def tick(conn: sqlite3.Connection) -> dict:
             for post in due_posts(conn, project.id):
                 summary["advanced"] += advance_post(conn, post, config, providers)
                 lock.refresh(conn)
+
+            try:
+                check_alerts(conn, project, config, providers)
+            except FactoryError as exc:
+                # Не сумели позвать владельца — плохо, но это не повод ронять
+                # тик: посты важнее уведомлений о постах.
+                log.warning(
+                    "не удалось проверить тревоги",
+                    extra={"project": project.slug, "error": str(exc)},
+                )
 
         lock.write_heartbeat(conn)
 

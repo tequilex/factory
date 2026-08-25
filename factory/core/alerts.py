@@ -92,3 +92,41 @@ def vk_token_expired_text(project: str, token_env: str) -> str:
         f"Ключ подставится сам, посты поедут дальше. "
         f"Переменная: {token_env}"
     )
+
+
+#: Сколько пост может простоять на одном месте, прежде чем это станет странным.
+#: Сутки выбраны намеренно щедро: ожидание человека — не авария, и торопить
+#: владельца сообщениями через час было бы навязчиво.
+STUCK_AFTER_HOURS = 24
+
+
+def nothing_to_publish_text(project: str, free_topics: int, in_flight: int) -> str:
+    return (
+        f"⚠️ [{project}] Скоро публиковать будет нечего.\n\n"
+        f"Свободных тем: {free_topics}. Постов в работе: {in_flight}.\n\n"
+        "Что сделать: добавить темы.\n"
+        f"  factory topics import {project} темы.txt\n\n"
+        "Файл — по теме в строке."
+    )
+
+
+def stuck_post_text(project: str, post_id: int, state: str, hours: int, title: str | None) -> str:
+    what = {
+        "in_review": "ждёт вашего решения — кнопки в сообщении выше",
+        "approved": "одобрен, но не публикуется",
+    }.get(state, f"застрял на шаге «{state}»")
+    return (
+        f"⏳ [{project}] Пост {post_id} {what} уже {hours} ч.\n\n"
+        f"«{title or 'без заголовка'}»\n\n"
+        "Это не ошибка, система его не бросила. Но если так и задумано — можно "
+        "не отвечать, я больше не напомню."
+    )
+
+
+def failed_post_text(project: str, post_id: int, title: str | None, error: str | None) -> str:
+    return (
+        f"❌ [{project}] Пост {post_id} сломался окончательно.\n\n"
+        f"«{title or 'без заголовка'}»\n\n"
+        f"{(error or 'причина не записана').strip()[:900]}\n\n"
+        f"Починив причину, вернуть пост в работу: factory post retry {post_id}"
+    )
