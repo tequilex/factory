@@ -435,3 +435,35 @@ class TestTwoListsInARow:
         query = bot["press_topics"]("t:add")
 
         assert "испорчена" in query.said
+
+
+class TestTheCommandMenu:
+    """Выпадашка по «/» — единственный способ узнать, что бот умеет.
+
+    Без неё команды надо помнить наизусть, а владелец заходит в бота раз в день
+    нажать одну кнопку.
+    """
+
+    def test_every_command_handler_is_in_the_menu(self, bot):
+        listed = {name for name, _ in review_bot.COMMANDS}
+        registered = set()
+        for handler in bot["dispatcher"].message.handlers:
+            for flt in handler.filters or ():
+                commands = getattr(flt.callback, "commands", None)
+                if commands:
+                    registered.update(commands)
+
+        assert registered - listed == set(), "команда есть, а в меню её нет"
+
+    def test_the_menu_has_no_commands_that_do_not_exist(self, bot):
+        names = [
+            getattr(handler.callback, "__name__", "")
+            for handler in bot["dispatcher"].message.handlers
+        ]
+
+        for name, _ in review_bot.COMMANDS:
+            assert f"on_{name}" in names, f"в меню есть /{name}, а обработчика нет"
+
+    def test_every_entry_explains_itself(self, bot):
+        """Пустое описание в выпадашке бесполезно."""
+        assert all(text.strip() for _, text in review_bot.COMMANDS)

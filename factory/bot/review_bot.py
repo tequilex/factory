@@ -63,6 +63,16 @@ START_TEXT = (
     "браузера."
 )
 
+#: Меню команд, которое Telegram показывает по нажатию «/». Без регистрации
+#: выпадающего списка нет вовсе, и команды приходится помнить наизусть.
+COMMANDS: tuple[tuple[str, str], ...] = (
+    ("status", "что происходит прямо сейчас"),
+    ("topics", "сколько тем осталось"),
+    ("pause", "остановить выпуск"),
+    ("resume", "продолжить выпуск"),
+    ("start", "что это за бот"),
+)
+
 NOT_YOURS = "Эта кнопка не для вас."
 ALREADY_DONE = "По этому посту решение уже принято."
 ALREADY_OUT = "Пост уже вышел в группу — отменить нельзя. Удалить его можно только в самой группе."
@@ -564,6 +574,18 @@ async def _drop_keyboard(query: CallbackQuery) -> None:
         log.info("не удалось убрать кнопки", extra={"reason": str(exc)})
 
 
+def _todays_count(
+    conn: sqlite3.Connection, project: ProjectConfig, slug: str
+) -> tuple[int, int]:
+    """Сколько постов вышло сегодня и сколько разрешено."""
+    from factory.core.steps.publish import published_today
+
+    row = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
+    if row is None:
+        return 0, project.limits.posts_per_day
+    return published_today(conn, project, row["id"]), project.limits.posts_per_day
+
+
 def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug: str | None) -> str:
     """Что ответить на «Опубликовать».
 
@@ -590,6 +612,17 @@ def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug
         return (
             "✅ Пост одобрен, но выпуск на паузе — он подождёт.\n\n"
             "Продолжить: /resume"
+        )
+
+    published, allowed = _todays_count(conn, project, slug)
+    if published >= allowed:
+        # Лимит про количество, а не про время: при отключённом расписании он
+        # тоже действует. Обещать «уходит ближайшим тиком» значит соврать на
+        # сутки — ровно так владелец и решил, что система сломалась.
+        return (
+            f"✅ Пост одобрен, но сегодня уже вышло {published} из {allowed} — "
+            "он уедет завтра.\n\n"
+            "Поменять: limits.posts_per_day в конфиге проекта."
         )
 
     if paths.ignore_schedule():
@@ -728,6 +761,23 @@ def run() -> None:
     asyncio.run(_poll(token, dispatcher))
 
 
+async def _publish_menu(bot: Bot) -> None:
+    """Показать список команд в выпадашке по «/».
+
+    Регистрируется при каждом запуске: список меняется вместе с ботом, а
+    Telegram помнит прошлый до перезаписи. Сбой здесь не повод не работать —
+    команды продолжат приниматься набором вручную.
+    """
+    from aiogram.types import BotCommand
+
+    try:
+        await bot.set_my_commands(
+            [BotCommand(command=name, description=text) for name, text in COMMANDS]
+        )
+    except Exception as exc:  # noqa: BLE001 — меню это удобство, не работа
+        log.warning("не удалось обновить меню команд", extra={"reason": str(exc)})
+
+
 async def _poll(token: str, dispatcher: Dispatcher) -> None:
     bot = Bot(token=token)
     try:
@@ -738,6 +788,7 @@ async def _poll(token: str, dispatcher: Dispatcher) -> None:
         # delete_webhook нужен на случай, если когда-то был настроен вебхук:
         # с ним длинный опрос не работает.
         await bot.delete_webhook(drop_pending_updates=False)
+        await _publish_menu(bot)
         await dispatcher.start_polling(bot)
     finally:
         await bot.session.close()

@@ -562,3 +562,51 @@ def machine_post(conn, post_id):
     from factory.core.models import Post
 
     return Post.from_row(conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone())
+
+
+class TestApprovalRespectsTheDailyLimit:
+    """Лимит про количество, а не про время — он действует и без расписания.
+
+    Владелец нажал «Опубликовать», увидел «уходит ближайшим тиком» и ничего не
+    дождался: сегодня уже вышло два поста из двух. Со стороны это неотличимо от
+    поломки.
+    """
+
+    @pytest.fixture
+    def project(self, bot_env):
+        from factory.core.config import TelegramCfg
+
+        base = bot_env["project"]
+        return base.model_copy(
+            update={
+                "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER]),
+                "vk": base.vk.model_copy(update={"app_id": 1, "schedule": ["19:30"]}),
+            }
+        )
+
+    def spend_the_day(self, bot_env, project):
+        from factory.core.clock import to_iso
+        from tests.conftest import insert_post, insert_topic
+
+        conn = bot_env["conn"]
+        for number in range(project.limits.posts_per_day):
+            topic = insert_topic(conn, bot_env["project_id"], f"Вышел {number}")
+            post = insert_post(conn, bot_env["project_id"], topic, idem_key=f"demo:{topic}:0")
+            with db.write_transaction(conn):
+                conn.execute(
+                    "UPDATE posts SET state = ?, published_at = ? WHERE id = ?",
+                    (State.PUBLISHED, to_iso(now_utc()), post),
+                )
+
+    def test_the_owner_is_told_it_waits_until_tomorrow(self, bot_env, project):
+        self.spend_the_day(bot_env, project)
+
+        text = review_bot._approval_text(bot_env["conn"], project, "demo")
+
+        assert "завтра" in text
+        assert "posts_per_day" in text
+
+    def test_with_room_left_the_usual_answer_comes_back(self, bot_env, project):
+        text = review_bot._approval_text(bot_env["conn"], project, "demo")
+
+        assert "завтра" not in text

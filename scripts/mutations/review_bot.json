@@ -137,6 +137,14 @@
     "показывать чужие темы": [
       "        if project.telegram and user_id in project.telegram.reviewers\n    ]",
       "        if project.telegram\n    ]"
+    ],
+    "обещать публикацию сверх дневного лимита": [
+      "    if published >= allowed:",
+      "    if False:"
+    ],
+    "считать лимит исчерпанным раньше времени": [
+      "    if published >= allowed:",
+      "    if published >= allowed - 1:"
     ]
   }
 }
