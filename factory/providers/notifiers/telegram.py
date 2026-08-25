@@ -58,6 +58,7 @@ KEYBOARD_ROWS: tuple[tuple[Decision, ...], ...] = (
 
 ICON: dict[Decision, str] = {
     Decision.APPROVE: "✅",
+    Decision.TRASH_TOPIC: "🚫",
     Decision.RETRY: "🔧",
     Decision.CANCEL: "↩️",
     Decision.IMAGES: "🔄",
@@ -65,6 +66,12 @@ ICON: dict[Decision, str] = {
     Decision.TEXT: "✏️",
     Decision.TRASH: "🗑",
 }
+
+
+#: Псевдодействия в callback_data. Решениями не являются: первое открывает
+#: переспрос, второе от него отказывается.
+ASK_TRASH = "ask"
+KEEP = "keep"
 
 
 def review_keyboard(post_id: int, version: int = 1) -> dict:
@@ -79,7 +86,14 @@ def review_keyboard(post_id: int, version: int = 1) -> dict:
             [
                 {
                     "text": f"{ICON[item]} {_label_for(item, version)}",
-                    "callback_data": f"r:{post_id}:{item.value}:{version}",
+                    # «В мусор» не выбрасывает сразу: сначала переспрос, что
+                    # именно выбрасываем. Необратимое действие не должно
+                    # срабатывать от одного нажатия.
+                    "callback_data": (
+                        f"r:{post_id}:{ASK_TRASH}:{version}"
+                        if item is Decision.TRASH
+                        else f"r:{post_id}:{item.value}:{version}"
+                    ),
                 }
                 for item in row
             ]
@@ -137,6 +151,35 @@ def variant_keyboard(post_id: int, version: int) -> dict:
                     "callback_data": f"r:{post_id}:{Decision.APPROVE.value}:{version}",
                 }
             ]
+        ]
+    }
+
+
+def trash_keyboard(post_id: int, version: int) -> dict:
+    """Что именно выбрасываем.
+
+    «В мусор» звучит как «выбросить всё», а выбрасывался только пост: тема
+    возвращалась в очередь, и по ней тут же писался такой же. Владелец при
+    этом ничего не выбирал — теперь выбирает.
+
+    Заодно это переспрос перед необратимым: раньше пост со всеми вариантами
+    терялся от одного случайного нажатия.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🗑 Только этот пост",
+                    "callback_data": f"r:{post_id}:{Decision.TRASH.value}:{version}",
+                }
+            ],
+            [
+                {
+                    "text": "🚫 Пост и тему",
+                    "callback_data": f"r:{post_id}:{Decision.TRASH_TOPIC.value}:{version}",
+                }
+            ],
+            [{"text": "← Назад", "callback_data": f"r:{post_id}:{KEEP}:{version}"}],
         ]
     }
 

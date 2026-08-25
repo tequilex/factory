@@ -166,6 +166,18 @@
     "не обещать срок возврата": [
       "            \"Вернусь через пару минут с новым вариантом.\\n\\n\"\n            \"Этот вариант никуда не делся: кнопка под ним осталась.\"\n        ),\n        Decision.SCENES: (",
       "            \"Этот вариант никуда не делся: кнопка под ним осталась.\"\n        ),\n        Decision.SCENES: ("
+    ],
+    "выбрасывать пост без переспроса": [
+      "    if len(parts) < 3 or parts[2] not in (ASK_TRASH, KEEP):\n        return False",
+      "    if True:\n        return False"
+    ],
+    "пускать постороннего к переспросу": [
+      "    slug = _project_of_post(conn, post_id)\n    if not _may_press(projects, slug, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return True",
+      "    slug = _project_of_post(conn, post_id)\n    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return True"
+    ],
+    "не давать пути назад из переспроса": [
+      "    if parts[2] == ASK_TRASH:\n        await query.answer()\n        await _replace_markup(query, trash_keyboard(post_id, version))\n    else:\n        await query.answer(\"Оставляю.\")\n        await _replace_markup(query, review_keyboard(post_id, version))",
+      "    await query.answer()\n    await _replace_markup(query, trash_keyboard(post_id, version))"
     ]
   }
 }

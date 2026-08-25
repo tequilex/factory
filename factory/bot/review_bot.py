@@ -41,7 +41,10 @@ from factory.providers.notifiers.telegram import (
     extract_vk_token,
     parse_callback,
     retry_keyboard,
+    ASK_TRASH,
+    KEEP,
     review_keyboard,
+    trash_keyboard,
     variant_keyboard,
 )
 
@@ -278,7 +281,11 @@ def build_dispatcher(
 
     @dispatcher.callback_query(F.data.startswith("r:"))
     async def on_decision(query: CallbackQuery) -> None:
-        parsed = parse_callback(query.data or "")
+        raw = query.data or ""
+        if await _handled_as_pseudo(conn, current(), query, raw):
+            return
+
+        parsed = parse_callback(raw)
         if parsed is None:
             await query.answer("Кнопка испорчена.", show_alert=True)
             return
@@ -671,6 +678,50 @@ async def _forget(message: Message) -> None:
         log.info("не удалось удалить сообщение с ключом", extra={"reason": str(exc)})
 
 
+async def _handled_as_pseudo(
+    conn: sqlite3.Connection,
+    projects: dict[str, ProjectConfig],
+    query: CallbackQuery,
+    raw: str,
+) -> bool:
+    """Нажатия, которые не решения: переспрос о мусоре и отказ от него.
+
+    Разведены с решениями намеренно. Кнопка переспроса и кнопка подтверждения
+    не могут слать одно и то же — иначе подтверждение снова откроет переспрос,
+    и выбраться из него будет нельзя.
+    """
+    parts = raw.split(":")
+    if len(parts) < 3 or parts[2] not in (ASK_TRASH, KEEP):
+        return False
+
+    post_id = int(parts[1]) if parts[1].isdigit() else None
+    version = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+    if post_id is None:
+        await query.answer("Кнопка испорчена.", show_alert=True)
+        return True
+
+    slug = _project_of_post(conn, post_id)
+    if not _may_press(projects, slug, query.from_user.id):
+        await query.answer(NOT_YOURS, show_alert=True)
+        return True
+
+    if parts[2] == ASK_TRASH:
+        await query.answer()
+        await _replace_markup(query, trash_keyboard(post_id, version))
+    else:
+        await query.answer("Оставляю.")
+        await _replace_markup(query, review_keyboard(post_id, version))
+    return True
+
+
+async def _replace_markup(query: CallbackQuery, keyboard: dict) -> None:
+    """Поменять клавиатуру, не трогая сам текст сообщения."""
+    try:
+        await query.message.edit_reply_markup(reply_markup=_as_markup(keyboard))
+    except Exception as exc:  # noqa: BLE001 — косметика
+        log.info("не удалось поменять кнопки", extra={"reason": str(exc)})
+
+
 async def _replace_keyboard(
     query: CallbackQuery, decision: Decision, post_id: int, version: int = 1
 ) -> None:
@@ -823,7 +874,11 @@ async def _confirm(
             "Вернусь через пару минут с новым вариантом.\n\n"
             "Этот вариант никуда не делся: кнопка под ним осталась."
         ),
-        Decision.TRASH: "🗑 Пост выброшен, тема вернулась в очередь.",
+        Decision.TRASH: (
+            "🗑 Пост выброшен. Тема вернулась в очередь, но в конец — "
+            "новый пост по ней появится не сразу."
+        ),
+        Decision.TRASH_TOPIC: "🚫 Пост выброшен, тема закрыта. Больше по ней не пишем.",
         Decision.RETRY: (
             "🔧 Пост вернулся в работу с чистым счётом попыток.\n\n"
             "Если причина поломки не устранена, он сломается снова — тогда я "

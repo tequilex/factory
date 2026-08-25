@@ -54,7 +54,12 @@ class Decision(StrEnum):
     IMAGES = "img"
     SCENES = "scn"
     TEXT = "txt"
+    #: Выбросить пост, тему вернуть в очередь — но в конец, а не на своё
+    #: старое место: иначе владелец выбрасывает пост и тут же получает новый
+    #: по той же теме.
     TRASH = "del"
+    #: Выбросить пост вместе с темой: плоха не попытка, а сама тема.
+    TRASH_TOPIC = "delt"
     #: Починить сломанный пост: вернуть в цепочку с чистым счётом попыток.
     #: Не решение о содержании — поэтому не считается ни одобрением, ни отказом.
     RETRY = "fix"
@@ -70,6 +75,7 @@ TARGET_STATE: dict[Decision, State] = {
     Decision.TEXT: State.QUEUED,
     Decision.TRASH: State.REJECTED,
     Decision.RETRY: State.QUEUED,
+    Decision.TRASH_TOPIC: State.REJECTED,
 }
 
 REJECTION_REASON: dict[Decision, RejectionReason | None] = {
@@ -80,6 +86,7 @@ REJECTION_REASON: dict[Decision, RejectionReason | None] = {
     Decision.TEXT: RejectionReason.TEXT,
     Decision.TRASH: RejectionReason.TRASH,
     Decision.RETRY: None,
+    Decision.TRASH_TOPIC: RejectionReason.TRASH,
 }
 
 LABEL: dict[Decision, str] = {
@@ -90,6 +97,7 @@ LABEL: dict[Decision, str] = {
     Decision.TEXT: "Текст заново",
     Decision.TRASH: "В мусор",
     Decision.RETRY: "Попробовать снова",
+    Decision.TRASH_TOPIC: "Выбросить и тему",
 }
 
 
@@ -148,6 +156,7 @@ ALLOWED_FROM: dict[Decision, State] = {
     Decision.TRASH: State.IN_REVIEW,
     Decision.CANCEL: State.APPROVED,
     Decision.RETRY: State.FAILED,
+    Decision.TRASH_TOPIC: State.IN_REVIEW,
 }
 
 
@@ -202,9 +211,18 @@ def apply(
 
         if decision is Decision.TRASH:
             # Тема не потрачена: по ней будет новый пост с другим idem_key.
+            # Но встаёт она в конец очереди — вернуть её на прежнее, обычно
+            # первое, место значит выдать владельцу такой же пост немедленно.
             conn.execute(
-                "UPDATE topics SET status = ? WHERE id = ?",
-                (TopicStatus.FREE, row["topic_id"]),
+                "UPDATE topics SET status = ?, requeued_at = ? WHERE id = ?",
+                (TopicStatus.FREE, stamp, row["topic_id"]),
+            )
+        elif decision is Decision.TRASH_TOPIC:
+            # Плоха сама тема: закрываем её, чтобы система не писала по ней
+            # снова и снова.
+            conn.execute(
+                "UPDATE topics SET status = ?, used_at = ? WHERE id = ?",
+                (TopicStatus.USED, stamp, row["topic_id"]),
             )
 
         # Сбрасываются и счётчик попыток, и время следующей: пост возвращается
@@ -243,7 +261,7 @@ def apply(
             # TODO: подтвердить у владельца. Если «Попробовать снова» чаще будет
             # означать «сделай заново, этот не удался», то вариант надо
             # наращивать. Выбрано осторожное: не терять то, что уже готово.
-            fresh = decision not in (Decision.TRASH, Decision.RETRY)
+            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC, Decision.RETRY)
             version = _next_version(conn, post_id) if fresh else None
             conn.execute(
                 "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
@@ -259,7 +277,7 @@ def apply(
                 ),
             )
 
-    if decision is Decision.TRASH:
+    if decision in (Decision.TRASH, Decision.TRASH_TOPIC):
         # Выброшенный пост никогда не опубликуется, а чистка файлов висела
         # только на публикации. С вариантами это стало заметно: каждый откат
         # оставляет ещё одну папку с картинками.

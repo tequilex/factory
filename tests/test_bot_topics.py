@@ -667,3 +667,121 @@ class TestTopicListsTellTheWholeStory:
         text = bot["send"]("on_topics").answered[0]
 
         assert "Чужая" not in text
+
+
+class TestTrashAsksWhatExactly:
+    """«В мусор» звучит как «выбросить всё», а выбрасывался только пост.
+
+    Тема возвращалась в очередь на своё старое — обычно первое — место, и по
+    ней тут же писался такой же пост. Владелец при этом ничего не выбирал.
+    """
+
+    @pytest.fixture
+    def ready(self, bot):
+        with db.write_transaction(bot["conn"]):
+            bot["conn"].execute(
+                "UPDATE posts SET state = ? WHERE id = ?", (State.IN_REVIEW, bot["post_id"])
+            )
+            bot["conn"].execute(
+                "UPDATE topics SET status = ? WHERE id = ?",
+                (TopicStatus.TAKEN, bot["topic_id"]),
+            )
+
+        def press(action: str):
+            query = FakeQuery(
+                data=f"r:{bot['post_id']}:{action}:1", from_user=FakeUser(OWNER)
+            )
+            asyncio.run(named(bot["dispatcher"], "callback", "on_decision").callback(query))
+            return query
+
+        bot["decide"] = press
+        return bot
+
+    def state_of(self, bot):
+        return bot["conn"].execute(
+            "SELECT state FROM posts WHERE id = ?", (bot["post_id"],)
+        ).fetchone()["state"]
+
+    def topic_status(self, bot):
+        return bot["conn"].execute(
+            "SELECT status FROM topics WHERE id = ?", (bot["topic_id"],)
+        ).fetchone()["status"]
+
+    def test_the_first_press_throws_nothing_away(self, ready):
+        query = ready["decide"]("ask")
+
+        assert self.state_of(ready) == State.IN_REVIEW
+        buttons = [b for row in query.message.last_markup.inline_keyboard for b in row]
+        assert len(buttons) == 3
+
+    def test_going_back_returns_the_usual_buttons(self, ready):
+        ready["decide"]("ask")
+
+        query = ready["decide"]("keep")
+
+        assert self.state_of(ready) == State.IN_REVIEW
+        buttons = [b for row in query.message.last_markup.inline_keyboard for b in row]
+        assert len(buttons) == 5
+
+    def test_only_the_post_returns_the_topic_to_the_queue(self, ready):
+        ready["decide"]("del")
+
+        assert self.state_of(ready) == State.REJECTED
+        assert self.topic_status(ready) == TopicStatus.FREE
+
+    def test_the_returned_topic_goes_to_the_end_of_the_queue(self, ready):
+        """Иначе выбросил пост — и тут же получил такой же по той же теме."""
+        conn = ready["conn"]
+        ready["decide"]("del")
+
+        row = conn.execute(
+            "SELECT requeued_at FROM topics WHERE id = ?", (ready["topic_id"],)
+        ).fetchone()
+        assert row["requeued_at"] is not None
+
+    def test_a_requeued_topic_is_taken_after_untouched_ones(self, ready):
+        from factory.core import machine
+        from tests.conftest import insert_topic
+
+        conn = ready["conn"]
+        ready["decide"]("del")
+        fresh = insert_topic(conn, ready["project_id"], "Свежая тема")
+
+        with db.write_transaction(conn):
+            taken = machine._claim_locked(conn, ready["project_id"])
+
+        assert taken == fresh, "вернувшаяся тема опять встала первой"
+
+    def test_post_and_topic_closes_the_topic(self, ready):
+        ready["decide"]("delt")
+
+        assert self.state_of(ready) == State.REJECTED
+        assert self.topic_status(ready) == TopicStatus.USED
+
+    def test_both_ways_are_recorded_as_a_rejection(self, ready):
+        ready["decide"]("delt")
+
+        row = ready["conn"].execute(
+            "SELECT reason FROM rejections WHERE post_id = ?", (ready["post_id"],)
+        ).fetchone()
+        assert row["reason"] == "trash"
+
+    def test_the_owner_is_told_which_one_happened(self, ready):
+        query = ready["decide"]("del")
+        assert "в конец" in query.message.answered[-1]
+
+        with db.write_transaction(ready["conn"]):
+            ready["conn"].execute(
+                "UPDATE posts SET state = ? WHERE id = ?", (State.IN_REVIEW, ready["post_id"])
+            )
+        query = ready["decide"]("delt")
+        assert "тема закрыта" in query.message.answered[-1]
+
+    def test_a_stranger_cannot_even_open_the_dialog(self, ready):
+        query = FakeQuery(
+            data=f"r:{ready['post_id']}:ask:1", from_user=FakeUser(STRANGER)
+        )
+        asyncio.run(named(ready["dispatcher"], "callback", "on_decision").callback(query))
+
+        assert "не для вас" in query.said
+        assert query.message.last_markup is None

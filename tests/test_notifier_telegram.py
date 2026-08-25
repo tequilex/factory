@@ -283,17 +283,43 @@ class TestErrors:
 
 
 class TestKeyboard:
-    def test_every_review_decision_has_a_button(self):
-        """Отмена сюда не входит: она появляется уже после одобрения."""
-        keyboard = review_keyboard(7)
-        flat = [button for row in keyboard["inline_keyboard"] for button in row]
+    def test_the_review_keyboard_has_all_five_decisions(self):
+        """Пять кнопок: четыре решения плюс переспрос о мусоре.
 
-        # Отмена и починка появляются отдельными кнопками в других местах:
-        # первая после одобрения, вторая под сообщением о поломке.
-        expected = [d for d in Decision if d not in (Decision.CANCEL, Decision.RETRY)]
-        assert len(flat) == len(expected)
-        carried = {button["callback_data"].split(":")[2] for button in flat}
-        assert carried == {d.value for d in expected}
+        Отмена, починка и «выбросить и тему» появляются в других местах: первая
+        после одобрения, вторая под сообщением о поломке, третья — в переспросе.
+        """
+        from factory.providers.notifiers.telegram import ASK_TRASH
+
+        flat = [b for row in review_keyboard(7)["inline_keyboard"] for b in row]
+        carried = [button["callback_data"].split(":")[2] for button in flat]
+
+        assert carried == [
+            Decision.APPROVE.value,
+            Decision.IMAGES.value,
+            Decision.SCENES.value,
+            Decision.TEXT.value,
+            ASK_TRASH,
+        ]
+
+    def test_the_trash_button_does_not_throw_anything_away(self):
+        """Необратимое действие не должно срабатывать от одного нажатия."""
+        from factory.providers.notifiers.telegram import ASK_TRASH
+
+        flat = [b for row in review_keyboard(7)["inline_keyboard"] for b in row]
+        trash = [b for b in flat if "мусор" in b["text"]][0]
+
+        assert trash["callback_data"].split(":")[2] == ASK_TRASH
+        assert Decision.TRASH.value not in trash["callback_data"].split(":")
+
+    def test_the_trash_dialog_offers_both_meanings_and_a_way_back(self):
+        from factory.providers.notifiers.telegram import KEEP, trash_keyboard
+
+        flat = [b for row in trash_keyboard(7, 2)["inline_keyboard"] for b in row]
+        carried = [button["callback_data"].split(":")[2] for button in flat]
+
+        assert carried == [Decision.TRASH.value, Decision.TRASH_TOPIC.value, KEEP]
+        assert all(button["callback_data"].endswith(":2") for button in flat)
 
     def test_a_button_carries_the_variant(self):
         """Одобряют тот вариант, под которым нажали, а не последний сделанный."""

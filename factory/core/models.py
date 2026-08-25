@@ -150,8 +150,9 @@ class Topic(_Row):
     angle: str | None = None
     status: str = TopicStatus.FREE
     used_at: datetime | None = None
+    requeued_at: datetime | None = None
 
-    _TIMESTAMPS: ClassVar[frozenset[str]] = frozenset({"used_at"})
+    _TIMESTAMPS: ClassVar[frozenset[str]] = frozenset({"used_at", "requeued_at"})
 
 
 @dataclass(slots=True)

@@ -43,6 +43,14 @@
     "считать таймаут чтения гарантированной недоставкой": [
       "                        delivered_unknown=True,",
       "                        delivered_unknown=False,"
+    ],
+    "мусор срабатывает с первого нажатия": [
+      "                        f\"r:{post_id}:{ASK_TRASH}:{version}\"\n                        if item is Decision.TRASH",
+      "                        f\"r:{post_id}:{item.value}:{version}\"\n                        if item is Decision.TRASH"
+    ],
+    "в переспросе нет варианта закрыть тему": [
+      "                    \"callback_data\": f\"r:{post_id}:{Decision.TRASH_TOPIC.value}:{version}\",",
+      "                    \"callback_data\": f\"r:{post_id}:{Decision.TRASH.value}:{version}\","
     ]
   }
 }

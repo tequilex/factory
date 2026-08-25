@@ -32,8 +32,8 @@
       "                \"UPDATE assets SET local_path = NULL, seed = ? WHERE id = ?\","
     ],
     "не возвращать тему в свободные при отказе": [
-      "            conn.execute(\n                \"UPDATE topics SET status = ? WHERE id = ?\",\n                (TopicStatus.FREE, row[\"topic_id\"]),\n            )",
-      "            pass"
+      "                \"UPDATE topics SET status = ?, requeued_at = ? WHERE id = ?\",\n                (TopicStatus.FREE, stamp, row[\"topic_id\"]),",
+      "                \"UPDATE topics SET status = ?, requeued_at = ? WHERE id = ? AND 1 = 0\",\n                (TopicStatus.FREE, stamp, row[\"topic_id\"]),"
     ],
     "освобождать тему при любом откате": [
       "        if decision is Decision.TRASH:",
@@ -107,21 +107,9 @@
       "    Decision.CANCEL: None,",
       "    Decision.CANCEL: RejectionReason.TRASH,"
     ],
-    "откат не заводит новый вариант": [
-      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
-      "            fresh = False"
-    ],
-    "мусор тоже заводит вариант": [
-      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
-      "            fresh = True"
-    ],
     "починка считается одобрением": [
       "        touches_decision = decision not in (Decision.RETRY, Decision.CANCEL)",
       "        touches_decision = decision is not Decision.CANCEL"
-    ],
-    "починка заводит новый вариант": [
-      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
-      "            fresh = decision is not Decision.TRASH"
     ],
     "чинить можно любой пост": [
       "    Decision.RETRY: State.FAILED,",
@@ -142,6 +130,38 @@
     "восстанавливать вариант до проверки состояния": [
       "    with db.write_transaction(conn):\n        # Отмена дополнительно требует, чтобы пост ещё не вышел: успели\n        # опубликовать — отменять уже нечего, надо удалять в самой группе.\n        row = conn.execute(\n            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ? \"\n            \"AND (? != ? OR external_id IS NULL)\",\n            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),\n        ).fetchone()\n        if row is None:\n            return False\n\n        if version is not None and decision is Decision.APPROVE:\n            from factory.core.versions import restore_within\n\n            if not restore_within(conn, post_id, version):\n                return False\n",
       "    if version is not None and decision is Decision.APPROVE:\n        from factory.core.versions import restore\n\n        if not restore(conn, post_id, version):\n            return False\n\n    with db.write_transaction(conn):\n        row = conn.execute(\n            \"SELECT id, topic_id FROM posts WHERE id = ? AND state = ? \"\n            \"AND (? != ? OR external_id IS NULL)\",\n            (post_id, ALLOWED_FROM[decision], decision, Decision.CANCEL),\n        ).fetchone()\n        if row is None:\n            return False\n"
+    ],
+    "возвращать тему на её старое место": [
+      "                \"UPDATE topics SET status = ?, requeued_at = ? WHERE id = ?\",\n                (TopicStatus.FREE, stamp, row[\"topic_id\"]),",
+      "                \"UPDATE topics SET status = ? WHERE id = ?\",\n                (TopicStatus.FREE, row[\"topic_id\"]),"
+    ],
+    "закрывать тему при обычном выбрасывании": [
+      "        if decision is Decision.TRASH:",
+      "        if False:"
+    ],
+    "не закрывать тему, когда просили": [
+      "        elif decision is Decision.TRASH_TOPIC:",
+      "        elif False:"
+    ],
+    "заводить новый вариант при выбрасывании темы": [
+      "            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC, Decision.RETRY)",
+      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)"
+    ],
+    "не убирать файлы при выбрасывании темы": [
+      "    if decision in (Decision.TRASH, Decision.TRASH_TOPIC):",
+      "    if decision is Decision.TRASH:"
+    ],
+    "откат не заводит новый вариант": [
+      "            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC, Decision.RETRY)",
+      "            fresh = False"
+    ],
+    "мусор тоже заводит вариант": [
+      "            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC, Decision.RETRY)",
+      "            fresh = decision is not Decision.RETRY"
+    ],
+    "починка заводит новый вариант": [
+      "            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC, Decision.RETRY)",
+      "            fresh = decision not in (Decision.TRASH, Decision.TRASH_TOPIC)"
     ]
   }
 }

@@ -295,3 +295,26 @@ class TestRestoringCleansForeignImages:
         rows = assets_of(conn, post_id)
         assert rows[0]["local_path"] == "/тот/самый.png"
         assert all(row["local_path"] is None for row in rows[1:]), "остались чужие картинки"
+
+
+class TestTrashingTheTopic:
+    """Выбросить пост вместе с темой — не то же, что выбросить только пост."""
+
+    def test_no_new_variant_is_started(self, asking):
+        """Переделывать нечего: тема закрыта, постов по ней больше не будет."""
+        conn, post_id = asking["conn"], asking["post_id"]
+        asking["to_review"]()
+        before = post_row(conn, post_id)["version"]
+
+        apply(conn, post_id, Decision.TRASH_TOPIC)
+
+        assert post_row(conn, post_id)["version"] == before
+
+    def test_the_files_are_removed(self, asking):
+        conn, post_id = asking["conn"], asking["post_id"]
+        asking["to_review"]()
+        assert paths.post_tmp_dir(post_id, 1).is_dir()
+
+        apply(conn, post_id, Decision.TRASH_TOPIC)
+
+        assert not paths.post_tmp_dir(post_id).exists()

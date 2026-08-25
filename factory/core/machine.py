@@ -65,9 +65,13 @@ def _claim_locked(conn: sqlite3.Connection, project_id: int) -> int | None:
     A single ``UPDATE ... RETURNING`` rather than a select followed by an update,
     so two ticks racing here cannot both walk away with the same topic.
     """
+    # Возвращённые темы идут после нетронутых, в порядке возврата. Иначе тема
+    # выброшенного поста встаёт на своё старое — обычно первое — место, и
+    # владелец сразу получает новый пост по ней же.
     row = conn.execute(
         "UPDATE topics SET status = ? WHERE id = ("
-        "  SELECT id FROM topics WHERE project_id = ? AND status = ? ORDER BY id LIMIT 1"
+        "  SELECT id FROM topics WHERE project_id = ? AND status = ? "
+        "  ORDER BY requeued_at IS NOT NULL, requeued_at, id LIMIT 1"
         ") RETURNING id",
         (TopicStatus.TAKEN, project_id, TopicStatus.FREE),
     ).fetchone()
