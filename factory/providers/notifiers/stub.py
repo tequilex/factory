@@ -24,6 +24,8 @@ class StubNotifier:
     albums: list[dict] = field(default_factory=list)
     finished: list[dict] = field(default_factory=list)
     alert_fix_posts: list[int | None] = field(default_factory=list)
+    waiting: list[dict] = field(default_factory=list)
+    forgotten: list[int] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     _next_message_id: int = 1000
 
@@ -63,6 +65,14 @@ class StubNotifier:
         )
         log.info("ревью-сообщение не отправлено: заглушка", extra={"post_id": post_id})
         return ReviewMessage(chat_id=chat_id, message_id=self._next_message_id)
+
+    def send_waiting(self, *, chat_id: int, text: str) -> int | None:
+        self._next_message_id += 1
+        self.waiting.append({"chat_id": chat_id, "text": text, "id": self._next_message_id})
+        return self._next_message_id
+
+    def forget(self, *, chat_id: int, message_id: int) -> None:
+        self.forgotten.append(message_id)
 
     def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
         self.finished.append({"chat_id": chat_id, "message_id": message_id, "text": text})

@@ -410,6 +410,29 @@ def _alert_stuck_posts(conn, project, config, providers, chat_id: int) -> None:
         )
 
 
+def _drop_waiting(conn, providers, chat_id: int, post_id: int) -> None:
+    """Убрать «вернусь через пару минут» у поста, который уже не вернётся.
+
+    Иначе обещание висит в переписке рядом с сообщением о поломке и прямо ему
+    противоречит.
+    """
+    row = conn.execute(
+        "SELECT waiting_message_id, review_chat_id FROM posts WHERE id = ?", (post_id,)
+    ).fetchone()
+    if row is None or not row["waiting_message_id"]:
+        return
+
+    try:
+        providers.notifier.forget(
+            chat_id=row["review_chat_id"] or chat_id, message_id=row["waiting_message_id"]
+        )
+    except Exception:  # noqa: BLE001 — уборка не повод ронять тик
+        log.info("не удалось убрать ожидание", extra={"post_id": post_id})
+
+    with db.write_transaction(conn):
+        conn.execute("UPDATE posts SET waiting_message_id = NULL WHERE id = ?", (post_id,))
+
+
 def _alert_failed_posts(conn, project, config, providers, chat_id: int) -> None:
     rows = conn.execute(
         "SELECT id, title, last_error FROM posts WHERE project_id = ? AND state = ? ORDER BY id",
@@ -417,6 +440,7 @@ def _alert_failed_posts(conn, project, config, providers, chat_id: int) -> None:
     ).fetchall()
 
     for row in rows:
+        _drop_waiting(conn, providers, chat_id, row["id"])
         alerts.raise_once(
             conn, providers.notifier, chat_id=chat_id,
             name="failed", scope=f"{config.slug}:{row['id']}",

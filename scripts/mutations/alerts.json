@@ -2,7 +2,8 @@
   "module": "factory/core/machine.py",
   "tests": [
     "tests/test_alerts.py",
-    "tests/test_queue.py"
+    "tests/test_queue.py",
+    "tests/test_waiting.py"
   ],
   "mutations": {
     "тревожить, пока постов ещё хватает": [
@@ -68,6 +69,14 @@
     "не звать владельца при истёкшем ключе": [
       "                try:\n                    _alert_if_hopeless(conn, config, providers, exc)\n                except Exception:  # noqa: BLE001 — уведомление о поломке не поломка\n                    log.exception(\"не удалось позвать владельца\")\n                record_wait(conn, post, str(exc).splitlines()[0])",
       "                record_wait(conn, post, str(exc).splitlines()[0])"
+    ],
+    "оставлять обещание на сломавшемся посте": [
+      "        _drop_waiting(conn, providers, chat_id, row[\"id\"])",
+      "        pass"
+    ],
+    "убирать обещание много раз подряд": [
+      "        conn.execute(\"UPDATE posts SET waiting_message_id = NULL WHERE id = ?\", (post_id,))",
+      "        pass"
     ]
   }
 }

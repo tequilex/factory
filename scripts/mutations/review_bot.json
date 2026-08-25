@@ -3,7 +3,8 @@
   "tests": [
     "tests/test_bot_topics.py",
     "tests/test_edits.py",
-    "tests/test_review_bot.py"
+    "tests/test_review_bot.py",
+    "tests/test_waiting.py"
   ],
   "mutations": {
     "пускать кого угодно к кнопкам": [
@@ -35,8 +36,8 @@
       "        pass"
     ],
     "не объяснять, что будет дальше": [
-      "        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)",
-      "        pass"
+      "        sent = await query.message.answer(text)",
+      "        sent = None"
     ],
     "ронять решение из-за неубранных кнопок": [
       "    except Exception as exc:  # noqa: BLE001 — решение уже применено, это косметика\n        log.info(\"не удалось поменять кнопки\", extra={\"reason\": str(exc)})",
@@ -153,6 +154,18 @@
     "не показывать, что в работе": [
       "    working = topics.in_progress(conn, project_id)",
       "    working = []"
+    ],
+    "не запоминать сообщение «делаю»": [
+      "        _remember_waiting(conn, post_id, getattr(sent, \"message_id\", None))",
+      "        pass"
+    ],
+    "запоминать ожидание и для одобрения": [
+      "    if decision in REMAKES:",
+      "    if True:"
+    ],
+    "не обещать срок возврата": [
+      "            \"Вернусь через пару минут с новым вариантом.\\n\\n\"\n            \"Этот вариант никуда не делся: кнопка под ним осталась.\"\n        ),\n        Decision.SCENES: (",
+      "            \"Этот вариант никуда не делся: кнопка под ним осталась.\"\n        ),\n        Decision.SCENES: ("
     ]
   }
 }

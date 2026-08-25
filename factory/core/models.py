@@ -179,6 +179,7 @@ class Post(_Row):
     review_album_at: datetime | None = None
     review_album_message_id: int | None = None
     version: int = 1
+    waiting_message_id: int | None = None
     review_message_id: int | None = None
     decided_at: datetime | None = None
     decided_by: int | None = None

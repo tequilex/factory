@@ -1,0 +1,30 @@
+{
+  "module": "factory/core/steps/review.py",
+  "tests": ["tests/test_waiting.py", "tests/test_decisions.py"],
+  "mutations": {
+    "не убирать сообщение «делаю»": [
+      "    _drop_waiting(ctx, telegram.chat_id)",
+      "    pass"
+    ],
+    "убирать ожидание после показа поста": [
+      "    _drop_waiting(ctx, telegram.chat_id)\n\n    album_id = ctx.post.review_album_message_id",
+      "    album_id = ctx.post.review_album_message_id"
+    ],
+    "не забывать отметку об ожидании": [
+      "    with db.write_transaction(ctx.conn):\n        ctx.conn.execute(\n            \"UPDATE posts SET waiting_message_id = NULL WHERE id = ?\", (ctx.post.id,)\n        )",
+      "    pass"
+    ],
+    "убирать чужое сообщение вместо ожидания": [
+      "            message_id=ctx.post.waiting_message_id,",
+      "            message_id=ctx.post.review_message_id,"
+    ],
+    "ронять показ поста из-за неудавшейся уборки": [
+      "    except Exception as exc:  # noqa: BLE001 — уборка не повод не показать пост\n        ctx.log.info(\"не удалось убрать ожидание\", extra={\"reason\": str(exc)})",
+      "    except ValueError as exc:\n        ctx.log.info(\"не удалось убрать ожидание\", extra={\"reason\": str(exc)})"
+    ],
+    "убирать ожидание, которого не было": [
+      "    if not ctx.post.waiting_message_id:\n        return",
+      "    if False:\n        return"
+    ]
+  }
+}

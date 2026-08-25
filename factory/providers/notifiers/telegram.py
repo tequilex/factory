@@ -362,6 +362,23 @@ class TelegramNotifier:
         message = self._call("sendMessage", data=data)
         return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
 
+    def send_waiting(self, *, chat_id: int, text: str) -> int | None:
+        message = self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})
+        return int(message["message_id"]) if message else None
+
+    def forget(self, *, chat_id: int, message_id: int) -> None:
+        """Убрать сообщение. Отказ Telegram проглатывается намеренно.
+
+        Сообщение могли удалить руками, оно могло устареть — уборка не повод
+        обрывать работу, ради которой всё затевалось.
+        """
+        try:
+            self._call(
+                "deleteMessage", data={"chat_id": chat_id, "message_id": message_id}
+            )
+        except ProviderError as exc:
+            log.info("не удалось убрать сообщение", extra={"reason": str(exc)})
+
     def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
         """Пост вышел: снять кнопку отмены и дать ссылку.
 

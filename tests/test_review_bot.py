@@ -22,6 +22,13 @@ STRANGER = 111222333
 
 
 @dataclass
+class Sent:
+    """Что вернул Telegram на отправку. У aiogram это Message с номером."""
+
+    message_id: int
+
+
+@dataclass
 class FakeMessage:
     """Сообщение, к которому прицеплены кнопки."""
 
@@ -29,9 +36,14 @@ class FakeMessage:
     markup_edits: int = 0
     edit_fails: bool = False
     last_markup: object = None
+    next_id: int = 5000
 
-    async def answer(self, text: str) -> None:
+    async def answer(self, text: str) -> Sent:
         self.answered.append(text)
+        self.next_id += 1
+        # Настоящий answer() возвращает отправленное сообщение. Без этого
+        # заглушка врёт, и код, запоминающий номер, выглядит рабочим.
+        return Sent(message_id=self.next_id)
 
     async def edit_reply_markup(self, reply_markup=None) -> None:
         if self.edit_fails:

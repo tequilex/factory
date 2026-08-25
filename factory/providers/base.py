@@ -108,6 +108,14 @@ class Notifier(Protocol):
         """
         ...
 
+    def send_waiting(self, *, chat_id: int, text: str) -> int | None:
+        """Сообщение «делаю», которое потом уберут. Возвращает его номер."""
+        ...
+
+    def forget(self, *, chat_id: int, message_id: int) -> None:
+        """Убрать сообщение из переписки. Сбой не важен: это уборка."""
+        ...
+
     def finish_review(self, *, chat_id: int, message_id: int, text: str) -> None:
         """Пост вышел: снять кнопку отмены и показать ссылку."""
         ...

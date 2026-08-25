@@ -310,7 +310,7 @@ def build_dispatcher(
 
         await query.answer(f"{ICON[decision]} {LABEL[decision]}")
         await _replace_keyboard(query, decision, post_id, version or 1)
-        await _confirm(query, decision, conn, current().get(slug or ""), slug)
+        await _confirm(query, decision, conn, current().get(slug or ""), slug, post_id)
 
     @dispatcher.errors()
     async def on_error(event, exception: Exception) -> bool:
@@ -783,26 +783,44 @@ def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug
     return f"✅ Уходит в группу {when:%d.%m в %H:%M} — это ближайший слот расписания."
 
 
+#: Решения, после которых пост уезжает переделываться. Только у них есть
+#: ожидание: одобрение и мусор ничего не готовят.
+REMAKES = (Decision.TEXT, Decision.SCENES, Decision.IMAGES)
+
+
+def _remember_waiting(conn: sqlite3.Connection, post_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    with db.write_transaction(conn):
+        conn.execute(
+            "UPDATE posts SET waiting_message_id = ? WHERE id = ?", (message_id, post_id)
+        )
+
+
 async def _confirm(
     query: CallbackQuery,
     decision: Decision,
     conn: sqlite3.Connection,
     project: ProjectConfig | None = None,
     slug: str | None = None,
+    post_id: int | None = None,
 ) -> None:
     text = {
         Decision.APPROVE: _approval_text(conn, project, slug),
         Decision.CANCEL: "↩️ Публикация отменена, пост снова ждёт вашего решения.",
         Decision.IMAGES: (
-            "🔄 Картинки будут перерисованы, текст сохранён.\n\n"
+            "🔄 Перерисовываю картинки, текст сохраняю.\n"
+            "Вернусь через пару минут с новым вариантом.\n\n"
             "Этот вариант никуда не делся: кнопка под ним осталась."
         ),
         Decision.SCENES: (
-            "🎲 Сцены придумаются заново, текст сохранён.\n\n"
+            "🎲 Придумываю сцены заново, текст сохраняю.\n"
+            "Вернусь через пару минут с новым вариантом.\n\n"
             "Этот вариант никуда не делся: кнопка под ним осталась."
         ),
         Decision.TEXT: (
-            "✏️ Текст будет написан заново, тема остаётся.\n\n"
+            "✏️ Пишу текст заново, тема остаётся.\n"
+            "Вернусь через пару минут с новым вариантом.\n\n"
             "Этот вариант никуда не делся: кнопка под ним осталась."
         ),
         Decision.TRASH: "🗑 Пост выброшен, тема вернулась в очередь.",
@@ -813,9 +831,18 @@ async def _confirm(
         ),
     }[decision]
     try:
-        await query.message.answer(text)
+        sent = await query.message.answer(text)
     except Exception as exc:  # noqa: BLE001 — то же самое: решение уже применено
         log.info("не удалось подтвердить решение", extra={"reason": str(exc)})
+        return
+
+    if decision in REMAKES:
+        # Это же сообщение и есть «делаю»: оно висит, пока готовится новый
+        # вариант, и убирается, когда тот приходит. Номер — в базу, потому что
+        # между откатом и результатом проходит пара минут, а бота могут
+        # перезапустить: иначе сообщение останется висеть навсегда, и владелец
+        # будет думать, что работа идёт до сих пор.
+        _remember_waiting(conn, post_id, getattr(sent, "message_id", None))
 
 
 def _status_text(

@@ -75,6 +75,25 @@ def _image_paths(ctx: StepContext) -> list[str]:
     return [row["local_path"] for row in rows]
 
 
+def _drop_waiting(ctx: StepContext, chat_id: int) -> None:
+    """Убрать сообщение «делаю», если оно было."""
+    if not ctx.post.waiting_message_id:
+        return
+
+    try:
+        ctx.providers.notifier.forget(
+            chat_id=ctx.post.review_chat_id or chat_id,
+            message_id=ctx.post.waiting_message_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — уборка не повод не показать пост
+        ctx.log.info("не удалось убрать ожидание", extra={"reason": str(exc)})
+
+    with db.write_transaction(ctx.conn):
+        ctx.conn.execute(
+            "UPDATE posts SET waiting_message_id = NULL WHERE id = ?", (ctx.post.id,)
+        )
+
+
 def _mark_album(ctx: StepContext, message_id: int | None) -> None:
     """Запомнить, что картинки уже отправляли. Своей транзакцией."""
     with db.write_transaction(ctx.conn):
@@ -140,6 +159,16 @@ def send_for_review(ctx: StepContext) -> StepResult:
     versions.record(ctx.conn, ctx.post)
 
     telegram = ctx.project.telegram
+
+    # Сообщение «делаю» убирается до того, как придёт результат: иначе владелец
+    # видит «вернусь через пару минут» под уже пришедшим вариантом.
+    #
+    # Убираем, а не превращаем в результат: альбом должен идти перед текстом, а
+    # сообщение-ожидание уже висит в переписке выше него. Отредактировать его в
+    # текст поста значило бы поставить текст над картинками и потерять связь
+    # между ними.
+    _drop_waiting(ctx, telegram.chat_id)
+
     album_id = ctx.post.review_album_message_id
 
     if ctx.post.review_album_at is None:
