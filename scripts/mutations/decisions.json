@@ -56,14 +56,6 @@
       "\"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
       "\"next_attempt_at = NULL, review_album_at = NULL, \""
     ],
-    "пустой снимок при отказе": [
-      "            \"post\": dict(row) if row else {},",
-      "            \"post\": {},"
-    ],
-    "не класть промпты в снимок": [
-      "            \"assets\": [dict(item) for item in prompts],",
-      "            \"assets\": [],"
-    ],
     "считать одобрения по всем проектам сразу": [
       "\"FROM posts p WHERE p.project_id = ? AND p.decided_at IS NOT NULL \"",
       "\"FROM posts p WHERE ? IS NOT NULL AND p.decided_at IS NOT NULL \""
@@ -83,6 +75,14 @@
     "не снимать отметку об альбоме при откате": [
       "\"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"",
       "\"next_attempt_at = NULL, review_message_id = NULL, \""
+    ],
+    "не сохранять снимок отказа": [
+      "                (post_id, reason, _snapshot(conn, post_id), stamp),",
+      "                (post_id, reason, None, stamp),"
+    ],
+    "снимок делать после очистки данных": [
+      "        if reason is not None:\n            conn.execute(\n                \"INSERT INTO rejections (post_id, reason, snapshot, created_at) \"\n                \"VALUES (?, ?, ?, ?)\",\n                (post_id, reason, _snapshot(conn, post_id), stamp),\n            )\n\n        _clear_for(conn, decision, post_id)",
+      "        _clear_for(conn, decision, post_id)\n\n        if reason is not None:\n            conn.execute(\n                \"INSERT INTO rejections (post_id, reason, snapshot, created_at) \"\n                \"VALUES (?, ?, ?, ?)\",\n                (post_id, reason, _snapshot(conn, post_id), stamp),\n            )"
     ]
   }
 }

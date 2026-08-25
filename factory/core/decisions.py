@@ -36,7 +36,7 @@ from enum import StrEnum
 from factory.core import db
 from factory.core.clock import now_utc, to_iso
 from factory.core.logging import get_logger
-from factory.core.models import State, TopicStatus
+from factory.core.models import Post, RejectionReason, State, TopicStatus
 
 log = get_logger(__name__)
 
@@ -64,12 +64,12 @@ TARGET_STATE: dict[Decision, State] = {
     Decision.TRASH: State.REJECTED,
 }
 
-REJECTION_REASON: dict[Decision, str | None] = {
+REJECTION_REASON: dict[Decision, RejectionReason | None] = {
     Decision.APPROVE: None,
-    Decision.IMAGES: "images",
-    Decision.SCENES: "scenes",
-    Decision.TEXT: "text",
-    Decision.TRASH: "trash",
+    Decision.IMAGES: RejectionReason.IMAGES,
+    Decision.SCENES: RejectionReason.SCENES,
+    Decision.TEXT: RejectionReason.TEXT,
+    Decision.TRASH: RejectionReason.TRASH,
 }
 
 LABEL: dict[Decision, str] = {
@@ -82,24 +82,16 @@ LABEL: dict[Decision, str] = {
 
 
 def _snapshot(conn: sqlite3.Connection, post_id: int) -> str:
-    """Что было в посте на момент отказа. Будущий обучающий набор."""
-    row = conn.execute(
-        "SELECT title, body, question, factcheck_verdict, factcheck_notes "
-        "FROM posts WHERE id = ?",
-        (post_id,),
-    ).fetchone()
-    prompts = conn.execute(
-        "SELECT kind, position, prompt, seed FROM assets WHERE post_id = ? ORDER BY position",
-        (post_id,),
-    ).fetchall()
-    return json.dumps(
-        {
-            "post": dict(row) if row else {},
-            "assets": [dict(item) for item in prompts],
-        },
-        ensure_ascii=False,
-    )
+    """Что было в посте на момент отказа. Будущий обучающий набор.
 
+    Формат тот же, что у отказа из командной строки: две колонки ``snapshot`` в
+    одной таблице с разной структурой означали бы два разборщика для того, ради
+    чего таблица и заведена.
+    """
+    from factory.core.reject import snapshot_of
+
+    row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+    return snapshot_of(conn, Post.from_row(row))
 
 def _clear_for(conn: sqlite3.Connection, decision: Decision, post_id: int) -> None:
     """Стереть ровно то, на что смотрит шаг, куда пост возвращается."""

@@ -86,10 +86,10 @@ def parse_callback(data: str) -> tuple[int, Decision] | None:
     return post_id, decision
 
 
-def _advice(code: int, description: str) -> str:
+def _advice(code: int, description: str, token_env: str = "TELEGRAM_BOT_TOKEN") -> str:
     if code == 401:
         return (
-            "Токен бота не принят. Проверь строку TELEGRAM_BOT_TOKEN в файле "
+            f"Токен бота не принят. Проверь строку {token_env} в файле "
             "секретов — возможно, бот удалён или токен перевыпущен у @BotFather."
         )
     if code == 403:
@@ -112,8 +112,11 @@ class TelegramNotifier:
 
     name = "telegram"
 
-    def __init__(self, *, token: str, proxy_env: str | None = None) -> None:
+    def __init__(
+        self, *, token: str, token_env: str = "TELEGRAM_BOT_TOKEN", proxy_env: str | None = None
+    ) -> None:
         self.token = token
+        self.token_env = token_env
         self.proxy_env = proxy_env
         self.calls = 0
 
@@ -144,7 +147,7 @@ class TelegramNotifier:
             raise ProviderError(
                 f"Telegram отказал в {method}.",
                 why=f"Код {code}: {description}",
-                what_to_do=_advice(code, description),
+                what_to_do=_advice(code, description, self.token_env),
                 status_code=code,
                 retry_after=_retry_after(payload),
             )
@@ -192,19 +195,6 @@ class TelegramNotifier:
 
     def alert(self, *, chat_id: int, text: str) -> None:
         self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})
-
-    def close_review(self, *, chat_id: int, message_id: int, verdict: str) -> None:
-        """Убрать кнопки и дописать, что выбрано.
-
-        Живая клавиатура под уже решённым постом — приглашение нажать второй раз.
-        Нажатие безвредно, но выглядит как поломка, поэтому кнопки снимаются.
-        """
-        self._call(
-            "editMessageReplyMarkup",
-            data={"chat_id": chat_id, "message_id": message_id, "reply_markup": _json({})},
-        )
-        self._call("sendMessage", data={"chat_id": chat_id, "text": verdict})
-
 
 def _retry_after(payload: dict) -> float | None:
     parameters = payload.get("parameters") or {}

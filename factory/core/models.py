@@ -50,6 +50,10 @@ class AssetKind(StrEnum):
 
 class RejectionReason(StrEnum):
     TEXT = "text"
+    # «Сцены придуманы плохо» — в отличие от IMAGES «сцены хорошие, нарисовано
+    # плохо». Для будущего обучающего набора это разные сигналы: первый учит
+    # придумывать, второй — рисовать.
+    SCENES = "scenes"
     IMAGES = "images"
     TRASH = "trash"
 

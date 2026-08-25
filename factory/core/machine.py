@@ -281,7 +281,10 @@ def advance_post(
             result = handler_for(post.state)(ctx)
         except Exception as exc:  # noqa: BLE001 — recorded, then the chain stops
             record_failure(conn, post, exc)
-            _alert_if_hopeless(conn, config, providers, exc)
+            try:
+                _alert_if_hopeless(conn, config, providers, exc)
+            except Exception:  # noqa: BLE001 — уведомление о поломке не поломка
+                log.exception("не удалось позвать владельца")
             break
 
         if result.outcome is Outcome.WAITING:
@@ -369,11 +372,17 @@ def _alert_stuck_posts(conn, project, config, providers, chat_id: int) -> None:
     худшее, что можно сделать.
     """
     threshold = to_iso(now_utc() - timedelta(hours=alerts.STUCK_AFTER_HOURS))
-    placeholders = ", ".join("?" for _ in TERMINAL_STATES)
+    # approved исключён намеренно: одобренный пост ждёт своего слота, и это
+    # работа, а не застревание. При queue_buffer = posts_per_day × 3 владелец
+    # одобряет за один заход больше постов, чем выходит за сутки, — тревога на
+    # них стала бы ровно тем шумом, из-за которого отказались от алерта
+    # «N постов ждут ревью». Протухший ключ на этом шаге виден по своей тревоге.
+    quiet = set(TERMINAL_STATES) | {State.APPROVED}
+    placeholders = ", ".join("?" for _ in quiet)
     rows = conn.execute(
         f"SELECT id, state, title FROM posts WHERE project_id = ? "
         f"AND state NOT IN ({placeholders}) AND updated_at <= ? ORDER BY id",
-        (project.id, *sorted(TERMINAL_STATES), threshold),
+        (project.id, *sorted(quiet), threshold),
     ).fetchall()
 
     for row in rows:

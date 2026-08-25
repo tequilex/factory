@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -68,6 +69,25 @@ def no_network(request, monkeypatch):
 
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
+
+
+@pytest.fixture(autouse=True)
+def clean_secrets_state():
+    """Секреты — глобальное состояние процесса, и его надо возвращать на место.
+
+    ``update_secret`` пишет в ``os.environ`` и в реестр «файл вправе обновить».
+    Без отката тест, проверяющий «переменной нет — понятная ошибка», начинает
+    зависеть от того, что запускалось до него.
+    """
+    from factory.core import secrets
+
+    before_env = dict(os.environ)
+    before_names = set(secrets._FROM_FILE)
+    yield
+    os.environ.clear()
+    os.environ.update(before_env)
+    secrets._FROM_FILE.clear()
+    secrets._FROM_FILE.update(before_names)
 
 
 @pytest.fixture

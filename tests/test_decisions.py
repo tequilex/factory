@@ -90,9 +90,13 @@ class TestTrash:
         assert row["reason"] == "trash"
 
         # Снимок — будущий обучающий набор. Пустой снимок бесполезен.
+        # Формат общий с отказом из командной строки: две разные структуры в
+        # одной колонке означали бы два разборщика для того, ради чего таблица
+        # и заведена.
         snapshot = json.loads(row["snapshot"])
-        assert snapshot["post"]["body"]
-        assert snapshot["assets"], "в снимок не попали промпты сцен"
+        assert snapshot["body"]
+        assert snapshot["state_when_rejected"] == State.IN_REVIEW
+        assert snapshot["prompts"], "в снимок не попали промпты сцен"
 
 
 class TestRollbackText:
@@ -668,3 +672,90 @@ class TestSendForReview:
         _, ctx = self.run_send(asking)
 
         assert len(ctx.providers.notifier.sent) == 1
+
+
+class TestAutoApprovalDoesNotStealPosts:
+    """Пост, уже лежащий у владельца с живыми кнопками, забирать нельзя.
+
+    Иначе счёт одобрений, набранный другими постами, публикует то, на что
+    человек в эту минуту смотрит и, может быть, собирается нажать «В мусор».
+    """
+
+    @pytest.fixture
+    def sent(self, pipeline):
+        from factory.core.config import TelegramCfg
+        from tests.conftest import insert_post, insert_topic
+
+        project = pipeline["project"]
+        asking = project.model_copy(
+            update={
+                "review": project.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(provider="stub", chat_id=123456789, reviewers=[123456789]),
+            }
+        )
+        pipeline["asking_project"] = asking
+
+        # Счёт одобрений набран другими постами.
+        conn, project_id = pipeline["conn"], pipeline["project_id"]
+        for number in range(asking.review.auto_after_n_approved):
+            topic = insert_topic(conn, project_id, f"Тема {number}")
+            post = insert_post(conn, project_id, topic, idem_key=f"demo:{topic}:0")
+            with db.write_transaction(conn):
+                conn.execute(
+                    "UPDATE posts SET state = ?, decided_at = ? WHERE id = ?",
+                    (State.PUBLISHED, "2020-01-01T00:00:00Z", post),
+                )
+        return pipeline
+
+    def run_wait(self, pipeline):
+        ctx = pipeline["context"](State.IN_REVIEW)
+        ctx.project = pipeline["asking_project"]
+        return handler_for(State.IN_REVIEW)(ctx)
+
+    def test_a_post_with_live_buttons_keeps_waiting(self, sent):
+        with db.write_transaction(sent["conn"]):
+            sent["conn"].execute(
+                "UPDATE posts SET review_message_id = 42 WHERE id = ?", (sent["post_id"],)
+            )
+
+        result = self.run_wait(sent)
+
+        assert result.outcome.value == "waiting", "пост забрали из-под живых кнопок"
+
+    def test_a_post_never_sent_may_be_auto_approved(self, sent):
+        """Обратная половина: если владельца не спрашивали, счёт работает."""
+        result = self.run_wait(sent)
+
+        assert result.advanced
+        assert result.next_state == State.APPROVED
+
+
+class TestSnapshotIsTakenBeforeErasing:
+    """Снимок делается ДО очистки, иначе в обучающий набор попадёт пустота.
+
+    Ради этой таблицы всё и затевалось: она должна показывать, что именно
+    владельцу не понравилось. Снимок, снятый после удаления промптов, покажет
+    отсутствие промптов.
+    """
+
+    def test_the_deleted_prompts_are_still_in_the_snapshot(self, in_review):
+        conn, post_id = in_review["conn"], in_review["post_id"]
+        prompts = [row["prompt"] for row in assets(conn, post_id)]
+        assert prompts, "у поста нет промптов — тест не о том"
+
+        apply(conn, post_id, Decision.SCENES)
+
+        assert assets(conn, post_id) == [], "промпты должны быть удалены"
+        (row,) = rejections(conn, post_id)
+        saved = [item["prompt"] for item in json.loads(row["snapshot"])["prompts"]]
+        assert saved == prompts
+
+    def test_the_erased_text_is_still_in_the_snapshot(self, in_review):
+        conn, post_id = in_review["conn"], in_review["post_id"]
+        body = post_row(conn, post_id)["body"]
+
+        apply(conn, post_id, Decision.TEXT)
+
+        assert post_row(conn, post_id)["body"] is None
+        (row,) = rejections(conn, post_id)
+        assert json.loads(row["snapshot"])["body"] == body

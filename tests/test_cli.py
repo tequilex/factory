@@ -655,3 +655,40 @@ class TestHelp:
         assert any("Ѐ" <= ch <= "ӿ" for ch in result.output), (
             f"у команды {' '.join(args)} справка не на русском"
         )
+
+
+class TestRetryClearsReviewMarks:
+    """Повтор обязан снимать отметки ревью, иначе пост вернётся без картинок.
+
+    Сценарий ровно по документации: владелец не отправил боту /start, отправка
+    падает на 403, отметка «альбом уже отправляли» ставится ДО вызова и
+    переживает поломку. Пять неудач — и пост в failed. Тревога и RUNBOOK
+    советуют `factory post retry`, после чего пост едет заново и приходит к
+    владельцу без единой картинки — то есть без того, ради чего он смотрит.
+    """
+
+    def test_the_album_mark_is_cleared(self, tmp_env, demo_project):
+        from factory.core import db as db_module
+        from factory.core.models import State
+        from tests.conftest import insert_post, insert_project, insert_topic
+
+        run("init")
+        conn = db_module.open_db()
+        project_id = insert_project(conn, "demo")
+        topic_id = insert_topic(conn, project_id)
+        post_id = insert_post(conn, project_id, topic_id, idem_key="demo:1:0")
+        with db_module.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET state = ?, review_album_at = ?, review_message_id = 7 "
+                "WHERE id = ?",
+                (State.FAILED, "2020-01-01T00:00:00Z", post_id),
+            )
+        conn.close()
+
+        assert run("post", "retry", str(post_id)).exit_code == 0
+
+        conn = db_module.open_db()
+        row = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+        conn.close()
+        assert row["review_album_at"] is None, "пост вернётся на ревью без картинок"
+        assert row["review_message_id"] is None

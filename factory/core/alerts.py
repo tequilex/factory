@@ -18,7 +18,6 @@ import sqlite3
 
 from factory.core import db
 from factory.core.clock import now_utc, to_iso
-from factory.core.errors import FactoryError
 from factory.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -55,7 +54,12 @@ def raise_once(
 
     try:
         notifier.alert(chat_id=chat_id, text=text)
-    except FactoryError as exc:
+    except Exception as exc:  # noqa: BLE001 — см. ниже
+        # Ловится всё, а не только FactoryError: провайдер отдаёт наружу и
+        # httpx.ReadTimeout, а сеть до Telegram отвечает неровно. Уведомление о
+        # поломке не имеет права стать поломкой само — иначе один обрыв связи
+        # обрывает тик, хартбит не пишется, и на Этапе 7 healthcheck начнёт
+        # перезапускать контейнер по кругу.
         log.warning(
             "не удалось отправить тревогу",
             extra={"alert": name, "scope": scope, "reason": str(exc)},

@@ -86,9 +86,24 @@ def _may_press(projects: dict[str, ProjectConfig], slug: str | None, user_id: in
     return user_id in project.telegram.reviewers
 
 
-def build_dispatcher(conn: sqlite3.Connection, projects: dict[str, ProjectConfig]) -> Dispatcher:
-    """Собрать обработчики. Отдельной функцией — чтобы тесты обошлись без сети."""
+def build_dispatcher(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig] | None = None
+) -> Dispatcher:
+    """Собрать обработчики. Отдельной функцией — чтобы тесты обошлись без сети.
+
+    ``projects=None`` — читать конфиги заново на каждое нажатие. Так бот ведёт
+    себя как воркер, который перечитывает их каждый тик: владелец правит список
+    тех, кто одобряет посты, и это работает сразу. Иначе получалась ловушка —
+    RUNBOOK советует добавить человека в список, человек жмёт кнопку и получает
+    «эта кнопка не для вас», потому что бот помнит конфиг с момента запуска.
+
+    Чтение — это разбор небольшого YAML, и происходит оно не чаще, чем человек
+    нажимает кнопки.
+    """
     dispatcher = Dispatcher()
+
+    def current() -> dict[str, ProjectConfig]:
+        return projects if projects is not None else _projects()
 
     @dispatcher.message(Command("start"))
     async def on_start(message: Message) -> None:
@@ -96,7 +111,7 @@ def build_dispatcher(conn: sqlite3.Connection, projects: dict[str, ProjectConfig
 
     @dispatcher.message(Command("status"))
     async def on_status(message: Message) -> None:
-        await message.answer(_status_text(conn, projects, message.from_user.id))
+        await message.answer(_status_text(conn, current(), message.from_user.id))
 
     @dispatcher.message(F.text.contains("access_token="))
     async def on_vk_token(message: Message) -> None:
@@ -106,7 +121,7 @@ def build_dispatcher(conn: sqlite3.Connection, projects: dict[str, ProjectConfig
         человека вырезать подстроку из длинного адреса на телефоне — верный
         способ получить ключ, обрезанный на символ.
         """
-        await _accept_vk_token(conn, projects, message)
+        await _accept_vk_token(conn, current(), message)
 
     @dispatcher.callback_query(F.data.startswith("r:"))
     async def on_decision(query: CallbackQuery) -> None:
@@ -118,7 +133,7 @@ def build_dispatcher(conn: sqlite3.Connection, projects: dict[str, ProjectConfig
         post_id, decision = parsed
         slug = _project_of_post(conn, post_id)
 
-        if not _may_press(projects, slug, query.from_user.id):
+        if not _may_press(current(), slug, query.from_user.id):
             # Молчать нельзя: со стороны это неотличимо от поломки.
             log.warning(
                 "нажатие от постороннего",
@@ -169,21 +184,27 @@ async def _accept_vk_token(
     # сообществу; висеть в истории он не должен.
     await _forget(message)
 
-    slug, project = mine[0]
-    name = project.vk.upload_token_env
-    if not name:
-        await message.answer(f"У проекта [{slug}] не задано поле vk.upload_token_env.")
-        return
+    # Проектов может быть несколько, и переменная с ключом у каждого своя.
+    # Записать в первую попавшуюся и снять тревогу у всех значило бы оставить
+    # остальные со старым ключом и без предупреждения.
+    updated: list[str] = []
+    for slug, project in mine:
+        name = project.vk.upload_token_env
+        if not name:
+            await message.answer(f"У проекта [{slug}] не задано поле vk.upload_token_env.")
+            continue
+        try:
+            secrets.update_secret(name, token)
+        except FactoryError as exc:
+            await message.answer(str(exc))
+            return
+        alerts.clear(conn, "vk_token", slug)
+        updated.append(name)
+        log.info("ключ ВК обновлён владельцем", extra={"slug": slug, "name": name})
 
-    try:
-        secrets.update_secret(name, token)
-    except FactoryError as exc:
-        await message.answer(str(exc))
+    if not updated:
         return
-
-    for other_slug, other in mine:
-        alerts.clear(conn, "vk_token", other_slug)
-        log.info("ключ ВК обновлён владельцем", extra={"slug": other_slug, "name": name})
+    name = ", ".join(sorted(set(updated)))
 
     await message.answer(
         f"Ключ принят и сохранён ({name}). Ваше сообщение я удалил.\n\n"
@@ -241,11 +262,14 @@ def _status_text(
             "SUM(state = ?) AS waiting, "
             "SUM(state = ?) AS approved, "
             "SUM(state = ?) AS failed, "
-            "SUM(state NOT IN (?, ?, ?, ?)) AS working "
+            "SUM(state NOT IN (?, ?, ?, ?, ?)) AS working "
             "FROM posts o JOIN projects p ON p.id = o.project_id WHERE p.slug = ?",
             (
                 State.IN_REVIEW, State.APPROVED, State.FAILED,
+                # approved и in_review уже посчитаны отдельными строками выше:
+                # без них в этом списке один пост попадал бы в две строки сразу.
                 State.PUBLISHED, State.REJECTED, State.FAILED, State.IN_REVIEW,
+                State.APPROVED,
                 slug,
             ),
         ).fetchone()
@@ -302,7 +326,8 @@ def run() -> None:
     token = resolve_secret(next(iter(tokens)), context="бота в Telegram")
     conn = db.connect()
     db.migrate(conn)
-    dispatcher = build_dispatcher(conn, projects)
+    # Без словаря: конфиги перечитываются на каждое нажатие.
+    dispatcher = build_dispatcher(conn)
 
     log.info("бот запущен", extra={"projects": sorted(projects)})
     asyncio.run(_poll(token, dispatcher))

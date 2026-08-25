@@ -51,7 +51,7 @@
       "            except ZeroDivisionError as exc:"
     ],
     "не объяснять истёкший ключ": [
-      "    if code == 5:",
+      "    if code == TOKEN_EXPIRED:",
       "    if False:"
     ],
     "не объяснять перепутанные ключи": [
@@ -77,6 +77,18 @@
     "гасить уборку при любой ошибке, включая временную": [
       "                if exc.code in (15, 27):",
       "                if True:"
+    ],
+    "не отличать истёкший ключ от прочих ошибок": [
+      "    @property\n    def token_expired(self) -> bool:\n        return self.code == TOKEN_EXPIRED",
+      "    @property\n    def token_expired(self) -> bool:\n        return False"
+    ],
+    "не говорить, какой из двух ключей истёк": [
+      "                token_env=self._env_of(token),",
+      "                token_env=None,"
+    ],
+    "перепутать ключи местами в сообщении": [
+      "        if token == self.upload_token:\n            return self.upload_token_env",
+      "        if token == self.upload_token:\n            return self.token_env"
     ]
   }
 }

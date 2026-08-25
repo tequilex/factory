@@ -15,6 +15,7 @@ from pathlib import Path
 
 import typer
 
+from factory.core import alerts
 from factory.core import config as config_module
 from factory.core import db, lock, machine, paths
 from factory.core.clock import now_utc, to_iso
@@ -503,10 +504,21 @@ def post_retry(post_id: int) -> None:
     target = post.state if post.state != State.FAILED else State.QUEUED
     with db.write_transaction(conn):
         conn.execute(
+            # Отметки ревью зануляются вместе с состоянием. Без этого пост,
+            # сломавшийся на отправке, вернулся бы к владельцу без единой
+            # картинки: отметка «альбом уже отправляли» ставится ДО вызова и
+            # переживает поломку.
             "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
-            "next_attempt_at = NULL, updated_at = ? WHERE id = ?",
+            "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
+            "updated_at = ? WHERE id = ?",
             (target, to_iso(now_utc()), post_id),
         )
+    slug = conn.execute(
+        "SELECT slug FROM projects WHERE id = ?", (post.project_id,)
+    ).fetchone()["slug"]
+    # Иначе повторная поломка того же поста пройдёт молча: тревога уже висит.
+    alerts.clear(conn, "failed", f"{slug}:{post_id}")
+    alerts.clear(conn, "stuck", f"{slug}:{post_id}")
     conn.close()
 
     if post.state == State.FAILED:

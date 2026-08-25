@@ -35,9 +35,29 @@ log = get_logger(__name__)
 #: (docker compose, шелл), задано снаружи и главнее файла.
 _FROM_FILE: set[str] = set()
 
+#: Строка-пометка в самом файле: перечисляет имена, которые система обновляет
+#: сама. Хранится в файле, а не в памяти, потому что писать и читать их будут
+#: разные процессы — ключ ВК записывает бот, а подхватывает воркер.
+#:
+#: Без этого обновление ключа сломалось бы в Docker, где compose передаёт тот же
+#: файл через ``env_file``: значения приходят настоящими переменными окружения,
+#: правило «окружение главнее файла» запрещает их трогать, и владелец, вставив
+#: ключ через бота, всё равно ждал бы перезапуска контейнера.
+MANAGED_MARKER = "# factory-managed:"
+
 # Владелец читает и пишет, остальные — никак. Файл с ключами от сообщества и
 # от платных моделей не должен быть доступен другим пользователям машины.
 _PRIVATE = stat.S_IRUSR | stat.S_IWUSR
+
+
+def _managed_in(text: str) -> set[str]:
+    """Имена, помеченные в файле как обновляемые системой."""
+    names: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(MANAGED_MARKER):
+            names.update(line[len(MANAGED_MARKER):].split())
+    return names
 
 
 def _parse(text: str) -> tuple[dict[str, str], list[str]]:
@@ -81,7 +101,9 @@ def load_env_file(path: Path | None = None, *, refresh: bool = False) -> int:
     if not target.is_file():
         return 0
 
-    values, duplicates = _parse(target.read_text(encoding="utf-8"))
+    text = target.read_text(encoding="utf-8")
+    values, duplicates = _parse(text)
+    managed = _managed_in(text)
 
     if duplicates:
         log.warning(
@@ -91,7 +113,7 @@ def load_env_file(path: Path | None = None, *, refresh: bool = False) -> int:
 
     loaded = 0
     for name, value in values.items():
-        ours = name in _FROM_FILE
+        ours = name in _FROM_FILE or name in managed
         if name in os.environ and not (refresh and ours):
             continue
         if os.environ.get(name) != value:
@@ -99,6 +121,39 @@ def load_env_file(path: Path | None = None, *, refresh: bool = False) -> int:
         _FROM_FILE.add(name)
         loaded += 1
     return loaded
+
+
+def _rewritten(existing: str, name: str, value: str) -> tuple[str, bool]:
+    """Файл с новым значением. Всё остальное остаётся как было.
+
+    Построчная правка, а не пересборка из разобранных пар: в этом файле человек
+    пишет себе пометки, откуда какой ключ и когда истекает. Пересборка стёрла бы
+    их при первом же обновлении ключа ботом.
+    """
+    lines = existing.splitlines()
+    out: list[str] = []
+    replaced = False
+
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.startswith(MANAGED_MARKER):
+            continue
+        if "=" in stripped and not stripped.startswith("#"):
+            key = stripped.partition("=")[0].strip()
+            if key == name:
+                if replaced:
+                    continue  # повтор того же имени — схлопываем в одну строку
+                out.append(f"{name}={value}")
+                replaced = True
+                continue
+        out.append(raw)
+
+    if not replaced:
+        out.append(f"{name}={value}")
+
+    managed = sorted(_managed_in(existing) | {name})
+    out.append(f"{MANAGED_MARKER} {' '.join(managed)}")
+    return "\n".join(out).strip("\n") + "\n", replaced
 
 
 def update_secret(name: str, value: str, path: Path | None = None) -> None:
@@ -126,11 +181,7 @@ def update_secret(name: str, value: str, path: Path | None = None) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     existing = target.read_text(encoding="utf-8") if target.is_file() else ""
-    values, _ = _parse(existing)
-    replaced = name in values
-    values[name] = value
-
-    body = "".join(f"{key}={item}\n" for key, item in values.items())
+    body, replaced = _rewritten(existing, name, value)
 
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=target.parent, prefix=".env.", delete=False

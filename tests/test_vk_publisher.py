@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from factory.core.errors import ProviderError
-from factory.providers.publishers.vk import VkPublisher
+from factory.providers.publishers.vk import VkError, VkPublisher
 
 GROUP = 111222333
 UPLOAD_URL = "https://pu.vk.com/c123/upload.php?act=do_add"
@@ -417,3 +417,45 @@ class TestErrorMessages:
             publisher(recorder, monkeypatch).publish(Post(), [missing])
 
         assert "factory post retry" in str(excinfo.value)
+
+
+class TestExpiredTokenIsRecognised:
+    """Ключей два, и «ошибка 5» обязана сказать, какой именно менять.
+
+    Картинки грузит ключ пользователя, публикует ключ сообщества. Протухает
+    почти всегда первый, но без имени переменной владельцу это не помогает:
+    он полезет менять не тот.
+    """
+
+    def test_the_upload_key_is_named(self, images, monkeypatch):
+        recorder = Recorder({"photos.getWallUploadServer": error(5, "expired")})
+        vk = publisher(
+            recorder, monkeypatch,
+            token_env="VK_TOKEN_GROUP", upload_token_env="VK_UPLOAD_TOKEN",
+        )
+
+        with pytest.raises(VkError) as excinfo:
+            vk.publish(Post(), images)
+
+        assert excinfo.value.token_env == "VK_UPLOAD_TOKEN"
+        assert "VK_UPLOAD_TOKEN" in str(excinfo.value)
+
+    def test_it_is_marked_as_an_expired_key(self, images, monkeypatch):
+        """По этой отметке машина решает, звать ли владельца."""
+        recorder = Recorder({"photos.getWallUploadServer": error(5, "expired")})
+        vk = publisher(recorder, monkeypatch, upload_token_env="VK_UPLOAD_TOKEN")
+
+        with pytest.raises(VkError) as excinfo:
+            vk.publish(Post(), images)
+
+        assert excinfo.value.token_expired is True
+
+    def test_other_failures_are_not_expired_keys(self, images, monkeypatch):
+        """Иначе владельца будили бы ключом по любому отказу ВК."""
+        recorder = Recorder({"photos.getWallUploadServer": error(27, "group auth")})
+        vk = publisher(recorder, monkeypatch, upload_token_env="VK_UPLOAD_TOKEN")
+
+        with pytest.raises(VkError) as excinfo:
+            vk.publish(Post(), images)
+
+        assert excinfo.value.token_expired is False

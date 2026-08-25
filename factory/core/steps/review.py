@@ -133,6 +133,12 @@ def send_for_review(ctx: StepContext) -> StepResult:
 @tracked_call(State.IN_REVIEW)
 def await_decision(ctx: StepContext) -> StepResult:
     """Ждём человека. Из этого состояния пост выводит бот, а не тик."""
+    if ctx.post.review_message_id:
+        # Пост уже лежит у владельца с живыми кнопками. Забрать его по
+        # автоодобрению значит опубликовать то, на что человек в этот момент
+        # смотрит и, может быть, собирается нажать «В мусор».
+        return waiting("жду решения владельца в Telegram")
+
     if _skips_review(ctx):
         return advanced(State.APPROVED)
 

@@ -98,8 +98,6 @@ class Notifier(Protocol):
 
     def alert(self, *, chat_id: int, text: str) -> None: ...
 
-    def close_review(self, *, chat_id: int, message_id: int, verdict: str) -> None: ...
-
 
 @runtime_checkable
 class Publisher(Protocol):

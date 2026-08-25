@@ -60,6 +60,10 @@
     "не отмечать отправку альбома заранее": [
       "        with db.write_transaction(ctx.conn):\n            ctx.conn.execute(\n                \"UPDATE posts SET review_album_at = ? WHERE id = ?\",\n                (to_iso(now_utc()), ctx.post.id),\n            )",
       "        pass"
+    ],
+    "забирать пост из-под живых кнопок": [
+      "    if ctx.post.review_message_id:\n        # Пост уже лежит у владельца",
+      "    if False:\n        # Пост уже лежит у владельца"
     ]
   }
 }

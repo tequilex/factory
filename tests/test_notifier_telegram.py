@@ -206,15 +206,22 @@ class TestErrors:
 
         assert "/start" in str(excinfo.value)
 
-    def test_a_bad_token_names_the_secret(self, monkeypatch):
+    def test_a_bad_token_names_the_secret_from_the_config(self, monkeypatch):
+        """Имя переменной настраиваемое: выдуманное указало бы не на ту строку."""
         recorder = Recorder(
             httpx.Response(401, json={"ok": False, "error_code": 401, "description": "Unauthorized"})
         )
+        transport = httpx.MockTransport(recorder.handler)
+        monkeypatch.setattr(
+            "factory.core.http.client_for",
+            lambda *a, **kw: httpx.Client(transport=transport, headers=kw.get("headers") or {}),
+        )
+        custom = TelegramNotifier(token=TOKEN, token_env="BOT_TOKEN_ВТОРОЙ")
 
         with pytest.raises(ProviderError) as excinfo:
-            notifier(recorder, monkeypatch).alert(chat_id=123456789, text="привет")
+            custom.alert(chat_id=123456789, text="привет")
 
-        assert "TELEGRAM_BOT_TOKEN" in str(excinfo.value)
+        assert "BOT_TOKEN_ВТОРОЙ" in str(excinfo.value)
 
     def test_a_wrong_chat_id_points_at_the_config(self, monkeypatch):
         recorder = Recorder(
@@ -286,16 +293,3 @@ class TestKeyboard:
     def test_foreign_or_broken_data_is_refused(self, data):
         """Чужая кнопка не должна применяться наугад."""
         assert parse_callback(data) is None
-
-
-class TestCloseReview:
-    def test_the_keyboard_is_removed_and_the_verdict_stated(self, monkeypatch):
-        recorder = Recorder()
-
-        notifier(recorder, monkeypatch).close_review(
-            chat_id=123456789, message_id=42, verdict="✅ Опубликовать"
-        )
-
-        assert recorder.methods() == ["editMessageReplyMarkup", "sendMessage"]
-        assert json.loads(recorder.form("editMessageReplyMarkup")["reply_markup"]) == {}
-        assert "Опубликовать" in recorder.form("sendMessage")["text"]

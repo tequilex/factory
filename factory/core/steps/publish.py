@@ -35,7 +35,7 @@ import sqlite3
 import uuid
 from datetime import datetime, time, timedelta
 
-from factory.core import db, paths
+from factory.core import alerts, db, paths
 from factory.core.clock import from_iso, now_utc, to_iso
 from factory.core.config import ProjectConfig
 from factory.core.models import Asset, Post, State, TopicStatus
@@ -196,6 +196,11 @@ def run(ctx: StepContext) -> StepResult:
         )
 
     external_id = ctx.providers.publisher.publish(post, assets)
+
+    # Публикация прошла — значит ключ загрузки рабочий. Тревогу о протухшем
+    # ключе снимаем здесь, а не только при обновлении через бота: ключ могли
+    # заменить руками по RUNBOOK, и тогда завтрашнее протухание прошло бы молча.
+    alerts.clear(ctx.conn, "vk_token", ctx.project.slug)
 
     stamp = to_iso(now_utc())
     with db.write_transaction(ctx.conn):

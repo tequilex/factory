@@ -22,7 +22,6 @@ class StubNotifier:
     name: str = "stub"
     sent: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
-    closed: list[dict] = field(default_factory=list)
     _next_message_id: int = 1000
 
     def send_for_review(
@@ -54,6 +53,3 @@ class StubNotifier:
     def alert(self, *, chat_id: int, text: str) -> None:
         self.alerts.append(text)
         log.info("тревога не отправлена: заглушка", extra={"text": text[:120]})
-
-    def close_review(self, *, chat_id: int, message_id: int, verdict: str) -> None:
-        self.closed.append({"chat_id": chat_id, "message_id": message_id, "verdict": verdict})

@@ -1,6 +1,9 @@
 {
   "module": "factory/core/machine.py",
-  "tests": ["tests/test_alerts.py", "tests/test_queue.py"],
+  "tests": [
+    "tests/test_alerts.py",
+    "tests/test_queue.py"
+  ],
   "mutations": {
     "тревожить, пока постов ещё хватает": [
       "    hopeless = free == 0 and working < config.limits.posts_per_day",
@@ -45,6 +48,14 @@
     "тревожить проекты без telegram": [
       "    if config.telegram is None:\n        return",
       "    if config.telegram is None:\n        pass"
+    ],
+    "ронять тик из-за сбоя отправки тревоги": [
+      "            except Exception:  # noqa: BLE001 — уведомление о поломке не поломка",
+      "            except FactoryError:"
+    ],
+    "считать застрявшим одобренный пост": [
+      "    quiet = set(TERMINAL_STATES) | {State.APPROVED}",
+      "    quiet = set(TERMINAL_STATES)"
     ]
   }
 }

@@ -220,3 +220,147 @@ class TestQuietProjects:
         machine.check_alerts(pipeline["conn"], row, pipeline["project"], pipeline["providers"])
 
         assert pipeline["providers"].notifier.alerts == []
+
+
+class TestAlertsNeverBreakTheTick:
+    """Уведомление о поломке не имеет права стать поломкой само.
+
+    Провайдер отдаёт наружу и httpx-исключения, а сеть до Telegram отвечает
+    неровно — это записано в CLAUDE.md как известная проблема. Если такое
+    исключение уйдёт из тика, не запишется хартбит, и на Этапе 7 healthcheck
+    начнёт перезапускать контейнер по кругу.
+    """
+
+    def test_a_network_failure_is_swallowed(self, conn):
+        import httpx
+
+        class Dead:
+            def alert(self, **kwargs):
+                raise httpx.ConnectError("сеть недоступна")
+
+        assert alerts.raise_once(
+            conn, Dead(), chat_id=OWNER, name="vk_token", scope="demo", text="истёк"
+        ) is False
+
+    def test_check_alerts_survives_a_dead_notifier(self, watched):
+        import httpx
+
+        class Dead:
+            def alert(self, **kwargs):
+                raise httpx.ReadTimeout("не дождались")
+
+        watched["providers"].notifier.alert = Dead().alert
+        drain(watched["conn"])
+
+        machine.check_alerts(
+            watched["conn"], watched["row"], watched["watched_project"], watched["providers"]
+        )
+
+    def test_the_tick_still_writes_its_heartbeat(self, watched):
+        """Главное следствие: тик доходит до конца и отмечается живым."""
+        import httpx
+
+        from factory.core import lock
+
+        class Dead:
+            def alert(self, **kwargs):
+                raise httpx.ReadTimeout("не дождались")
+
+        watched["providers"].notifier.alert = Dead().alert
+        drain(watched["conn"])
+        machine.check_alerts(
+            watched["conn"], watched["row"], watched["watched_project"], watched["providers"]
+        )
+        lock.write_heartbeat(watched["conn"])
+
+        assert lock.heartbeat_age_sec(watched["conn"]) is not None
+
+
+class TestApprovedIsNotStuck:
+    def test_a_post_waiting_for_its_slot_is_not_reported(self, watched):
+        """Одобренный пост ждёт слота — это работа, а не застревание.
+
+        При queue_buffer = posts_per_day × 3 владелец одобряет за один заход
+        больше постов, чем выходит за сутки. Тревога на них была бы ровно тем
+        шумом, из-за которого отказались от алерта «N постов ждут ревью».
+        """
+        watched["context"](State.APPROVED)
+        age(watched["conn"], watched["post_id"], alerts.STUCK_AFTER_HOURS * 3)
+
+        assert watched["check"]() == []
+
+
+class TestTheSecondGuard:
+    """Второй слой защиты: тревога может сломаться и после успешной отправки.
+
+    ``raise_once`` глотает сбои провайдера, но сама пишет в базу, и эта запись
+    тоже может не удаться. Шаг, упавший с ошибкой, зовёт тревогу прямо из
+    обработчика ``except`` — без второго guard такая ошибка вышла бы из тика.
+    """
+
+    def test_a_broken_alert_does_not_break_the_step_failure_path(self, watched, monkeypatch):
+        from factory.core.errors import FactoryError
+        from factory.core.steps import handler_for
+
+        conn = watched["conn"]
+        watched["context"](State.APPROVED)
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("база заблокирована")
+
+        monkeypatch.setattr(alerts, "raise_once", explode)
+
+        class ExpiredKey(FactoryError):
+            token_expired = True
+            token_env = "VK_UPLOAD_TOKEN"
+
+        def failing(ctx):
+            raise ExpiredKey("ключ истёк")
+
+        monkeypatch.setitem(
+            __import__("factory.core.steps", fromlist=["REGISTRY"]).REGISTRY,
+            State.APPROVED,
+            failing,
+        )
+
+        post = machine.reload_post(conn, watched["post_id"])
+        # Не должно поднять RuntimeError наружу: тик обязан дожить до хартбита.
+        machine.advance_post(conn, post, watched["watched_project"], watched["providers"])
+
+        assert machine.reload_post(conn, watched["post_id"]).retry_count == 1
+
+
+class TestAlertsDoNotOverwriteEachOther:
+    def test_two_different_alerts_for_one_project_both_arrive(self, watched):
+        """Иначе одна тревога гасила бы другую, и о второй беде не узнают.
+
+        Обе с одинаковой областью — именем проекта. Разойдись они только по
+        области, подмена ключа осталась бы незамеченной.
+        """
+        conn = watched["conn"]
+        alerts.raise_once(
+            conn, watched["providers"].notifier, chat_id=OWNER,
+            name="vk_token", scope="demo", text="ключ ВК истёк",
+        )
+        drain(conn)
+
+        messages = watched["check"]()
+
+        assert any("ключ ВК истёк" in text for text in messages)
+        assert any("публиковать будет нечего" in text for text in messages)
+
+
+class TestStuckThreshold:
+    def test_the_threshold_is_a_day(self):
+        """Число из задолженности Этапа 5: «дольше суток».
+
+        Литералом, а не через константу: сверять константу с самой собой значит
+        не проверять ничего — правка сдвинет обе стороны равенства сразу.
+        """
+        assert alerts.STUCK_AFTER_HOURS == 24
+
+    def test_twelve_hours_of_waiting_is_still_normal(self, watched):
+        watched["context"](State.IN_REVIEW)
+        age(watched["conn"], watched["post_id"], 12)
+
+        assert watched["check"]() == []

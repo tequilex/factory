@@ -374,3 +374,124 @@ def _accept(review_bot, conn, projects, text, user_id):
     message = FakeMessage(text=text, from_user=FakeUser(user_id))
     asyncio.run(review_bot._accept_vk_token(conn, projects, message))
     return message
+
+
+class TestManagedSecretsSurviveDocker:
+    """Ключ, обновляемый системой, обязан подхватываться и в контейнере.
+
+    В Docker тот же файл передаётся сервисам через ``env_file``, то есть
+    значения приходят настоящими переменными окружения. Правило «окружение
+    главнее файла» запретило бы их трогать, и главная польза этапа — «вставил
+    ключ, публикация продолжилась» — молча превратилась бы в «до перезапуска».
+    """
+
+    def test_the_file_wins_for_a_managed_name(self, tmp_env, monkeypatch):
+        from factory.core import paths
+
+        target = paths.env_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.первый")
+
+        # Так выглядит запуск в контейнере: значение уже в окружении.
+        monkeypatch.setenv("VK_UPLOAD_TOKEN", "vk1.a.первый")
+        secrets._FROM_FILE.discard("VK_UPLOAD_TOKEN")
+        target.write_text(
+            f"VK_UPLOAD_TOKEN=vk1.a.новый\n{secrets.MANAGED_MARKER} VK_UPLOAD_TOKEN\n",
+            encoding="utf-8",
+        )
+
+        secrets.load_env_file(refresh=True)
+
+        assert os.environ["VK_UPLOAD_TOKEN"] == "vk1.a.новый"
+
+    def test_an_unmanaged_name_still_obeys_the_environment(self, tmp_env, monkeypatch):
+        """Обычные секреты по-прежнему задаются снаружи."""
+        from factory.core import paths
+
+        monkeypatch.setenv("LLM_API_KEY", "снаружи")
+        secrets._FROM_FILE.discard("LLM_API_KEY")
+        target = paths.env_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("LLM_API_KEY=из_файла\n", encoding="utf-8")
+
+        secrets.load_env_file(refresh=True)
+
+        assert os.environ["LLM_API_KEY"] == "снаружи"
+
+    def test_the_marker_is_written_once_not_per_update(self, tmp_env):
+        from factory.core import paths
+
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.первый")
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.второй")
+
+        text = paths.env_file().read_text(encoding="utf-8")
+        assert text.count(secrets.MANAGED_MARKER) == 1
+
+
+class TestOwnerNotesSurvive:
+    def test_comments_are_not_erased(self, tmp_env):
+        """В этом файле владелец пишет себе, откуда какой ключ."""
+        from factory.core import paths
+
+        target = paths.env_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "# ключ сообщества, взят 20 августа\nVK_TOKEN_GROUP=групповой\n\n"
+            "# ключ загрузки, живёт сутки\nVK_UPLOAD_TOKEN=старый\n",
+            encoding="utf-8",
+        )
+
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.новый")
+
+        text = target.read_text(encoding="utf-8")
+        assert "# ключ сообщества, взят 20 августа" in text
+        assert "# ключ загрузки, живёт сутки" in text
+        assert "VK_TOKEN_GROUP=групповой" in text
+
+
+class TestWritingSurvivesFailure:
+    def test_a_crash_mid_write_leaves_no_debris(self, tmp_env, monkeypatch):
+        """Обрыв на переименовании не должен оставлять огрызок рядом с файлом.
+
+        Файл лежит в каталоге данных, который владелец видит. Мусор в нём —
+        повод для вопроса «а это что?», на который никто не ответит.
+        """
+        from factory.core import paths
+
+        target = paths.env_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("VK_TOKEN_GROUP=групповой\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "os.replace", lambda *a: (_ for _ in ()).throw(OSError("диск отвалился"))
+        )
+
+        with pytest.raises(OSError):
+            secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.новый")
+
+        assert list(target.parent.glob(".env.*")) == []
+        assert target.read_text(encoding="utf-8") == "VK_TOKEN_GROUP=групповой\n"
+
+
+class TestTheWholeChainWorks:
+    def test_a_key_written_by_the_bot_is_picked_up_by_the_worker(self, tmp_env, monkeypatch):
+        """Главная польза этапа целиком: вставил ключ — публикация поехала.
+
+        Записывает бот, читает воркер, это разные процессы. Проверка идёт через
+        update_secret + load_env_file(refresh=True) — ровно то, что делают они,
+        и с окружением, как в контейнере: значение уже задано снаружи.
+        """
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.вчерашний")
+
+        # Так выглядит воркер, поднятый до обновления ключа.
+        monkeypatch.setenv("VK_UPLOAD_TOKEN", "vk1.a.вчерашний")
+        secrets._FROM_FILE.discard("VK_UPLOAD_TOKEN")
+
+        # Бот принял новый ключ.
+        secrets.update_secret("VK_UPLOAD_TOKEN", "vk1.a.свежий")
+        monkeypatch.setenv("VK_UPLOAD_TOKEN", "vk1.a.вчерашний")
+        secrets._FROM_FILE.discard("VK_UPLOAD_TOKEN")
+
+        # Следующий тик воркера.
+        secrets.load_env_file(refresh=True)
+
+        assert os.environ["VK_UPLOAD_TOKEN"] == "vk1.a.свежий"

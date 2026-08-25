@@ -15,8 +15,8 @@
       "        if result.outcome is Outcome.WAITING:\n            record_failure(conn, post, RuntimeError(result.reason or 'ожидание'))\n            break"
     ],
     "продолжать цепочку после ошибки": [
-      "            record_failure(conn, post, exc)\n            break",
-      "            record_failure(conn, post, exc)\n            post = reload_post(conn, post.id)\n            continue"
+      "            except Exception:  # noqa: BLE001 — уведомление о поломке не поломка\n                log.exception(\"не удалось позвать владельца\")\n            break",
+      "            except Exception:  # noqa: BLE001 — уведомление о поломке не поломка\n                log.exception(\"не удалось позвать владельца\")\n            post = reload_post(conn, post.id)\n            continue"
     ],
     "не наращивать retry_count": [
       "    retry_count = post.retry_count + 1",

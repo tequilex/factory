@@ -84,6 +84,7 @@ def _telegram_notifier(config: ProjectConfig):
     telegram = config.telegram
     return TelegramNotifier(
         token=resolve_secret(telegram.token_env, context="бота в Telegram"),
+        token_env=telegram.token_env,
         proxy_env=telegram.proxy_env,
     )
 

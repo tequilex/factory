@@ -1,0 +1,41 @@
+{
+  "module": "factory/core/alerts.py",
+  "tests": [
+    "tests/test_alerts.py",
+    "tests/test_vk_token_refresh.py"
+  ],
+  "mutations": {
+    "ловить в тревогах только свои ошибки": [
+      "    except Exception as exc:  # noqa: BLE001 — см. ниже",
+      "    except (ValueError, KeyError) as exc:"
+    ],
+    "ставить отметку даже при неудачной отправке": [
+      "        return False\n\n    stamp = to_iso(now_utc())",
+      "        pass\n\n    stamp = to_iso(now_utc())"
+    ],
+    "звучать каждый раз заново": [
+      "    if is_raised(conn, name, scope):\n        return False",
+      "    if False:\n        return False"
+    ],
+    "не снимать тревогу вовсе": [
+      "        conn.execute(\"DELETE FROM meta WHERE key = ?\", (_key(name, scope),))",
+      "        pass"
+    ],
+    "смешать тревоги разных проектов": [
+      "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{name}:{scope}\"",
+      "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{name}\""
+    ],
+    "смешать разные тревоги одного проекта": [
+      "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{name}:{scope}\"",
+      "def _key(name: str, scope: str) -> str:\n    return f\"{_PREFIX}{scope}\""
+    ],
+    "не давать ссылку на получение ключа": [
+      "        f\"{VK_TOKEN_URL}\\n\\n\"",
+      "        \"\\n\\n\""
+    ],
+    "срок застревания в час вместо суток": [
+      "STUCK_AFTER_HOURS = 24",
+      "STUCK_AFTER_HOURS = 1"
+    ]
+  }
+}
