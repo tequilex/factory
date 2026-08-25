@@ -395,23 +395,47 @@ def _topics_text(
         row = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
         if row is None:
             continue
-        counts = topics.counts(conn, row["id"])
-        lines = [
-            f"[{slug}]",
-            f"  свободных: {counts.free}",
-            f"  в работе: {counts.taken}",
-            f"  израсходовано: {counts.used}",
-        ]
-        upcoming = topics.upcoming(conn, row["id"])
-        if upcoming:
-            lines.append("\n  Ближайшие:")
-            lines += [f"  • {title}" for title in upcoming]
-            if counts.free > len(upcoming):
-                lines.append(f"  …и ещё {counts.free - len(upcoming)}")
-        else:
-            lines.append("\n  Свободных тем нет. Пришлите новые списком, по теме в строке.")
-        blocks.append("\n".join(lines))
+        blocks.append(_one_project_topics(conn, slug, row["id"]))
     return "\n\n".join(blocks)
+
+
+def _one_project_topics(conn: sqlite3.Connection, slug: str, project_id: int) -> str:
+    """Три списка: что в запасе, что делается, что уже отработано.
+
+    Числа без списков отвечают только на «сколько», а спрашивают обычно «а что
+    именно» — чтобы понять, чем кормить систему дальше и не повторить тему.
+    """
+    counts = topics.counts(conn, project_id)
+    lines = [f"[{slug}] тем всего: {counts.total}"]
+
+    upcoming = topics.upcoming(conn, project_id)
+    if upcoming:
+        lines.append(f"\n📋 В запасе ({counts.free}), по очереди:")
+        lines += [f"  {number}. {title}" for number, title in enumerate(upcoming, start=1)]
+        lines += _tail(counts.free, len(upcoming))
+    else:
+        lines.append("\n📋 В запасе пусто. Пришлите новые темы списком, по теме в строке.")
+
+    working = topics.in_progress(conn, project_id)
+    if working:
+        lines.append(f"\n⚙️ В работе ({counts.taken}):")
+        lines += [f"  • {item.title} — {item.note}" for item in working]
+        lines += _tail(counts.taken, len(working))
+
+    finished = topics.done(conn, project_id)
+    if finished:
+        lines.append(f"\n✅ Отработано ({counts.used}), свежие сверху:")
+        for item in finished:
+            suffix = f" — {item.url}" if item.url else f" — {item.note}"
+            lines.append(f"  • {item.title}{suffix}")
+        lines += _tail(counts.used, len(finished))
+
+    return "\n".join(lines)
+
+
+def _tail(total: int, shown: int) -> list[str]:
+    """Сколько ещё не поместилось. Молчание тут читается как «это всё»."""
+    return [f"  …и ещё {total - shown}"] if total > shown else []
 
 
 def _switch(

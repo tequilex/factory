@@ -23,12 +23,12 @@
       "        if parsed is None:\n            parsed = (1, Decision.APPROVE)"
     ],
     "не сообщать, что решение уже принято": [
-      "            await query.answer(\n                _refusal(conn, post_id, decision), show_alert=True\n            )",
+      "            await query.answer(_refusal(conn, post_id, decision), show_alert=True)",
       "            await query.answer(\"\")"
     ],
     "не записывать, кто нажал": [
-      "        if not apply(conn, post_id, decision, by=query.from_user.id):",
-      "        if not apply(conn, post_id, decision, by=None):"
+      "        if not apply(conn, post_id, decision, by=query.from_user.id, version=version):",
+      "        if not apply(conn, post_id, decision, by=None, version=version):"
     ],
     "оставить кнопки после решения": [
       "        await _replace_keyboard(query, decision, post_id, version or 1)",
@@ -75,8 +75,8 @@
       "    if post_id is None:\n        return"
     ],
     "убирать кнопки совсем после одобрения": [
-      "    if decision is Decision.APPROVE:\n        markup = _as_markup(cancel_keyboard(post_id))",
-      "    if False:\n        markup = _as_markup(cancel_keyboard(post_id))"
+      "    if decision is Decision.APPROVE:\n        markup = _as_markup(cancel_keyboard(post_id, version))",
+      "    if False:\n        markup = _as_markup(cancel_keyboard(post_id, version))"
     ],
     "не возвращать кнопки после отмены": [
       "    elif decision is Decision.CANCEL:\n        markup = _as_markup(review_keyboard(post_id, version))",
@@ -87,16 +87,12 @@
       "    markup = _as_markup(review_keyboard(post_id))\n    if decision is Decision.APPROVE:"
     ],
     "путать вышедший пост с решённым": [
-      "    if decision is Decision.CANCEL and row is not None and row[\"external_id\"]:",
+      "    if decision is Decision.CANCEL and row[\"external_id\"]:",
       "    if False:"
     ],
     "одобрять последний вариант вместо выбранного": [
-      "        if decision is Decision.APPROVE and version is not None:",
-      "        if False:"
-    ],
-    "молча одобрять при пропавшем варианте": [
-      "            if not versions.restore(conn, post_id, version):\n                await query.answer(\n                    \"Этот вариант больше недоступен.\", show_alert=True\n                )\n                return",
-      "            versions.restore(conn, post_id, version)"
+      "        if not apply(conn, post_id, decision, by=query.from_user.id, version=version):",
+      "        if not apply(conn, post_id, decision, by=query.from_user.id, version=None):"
     ],
     "убирать кнопку с отложенного варианта": [
       "    elif decision in (Decision.TEXT, Decision.SCENES, Decision.IMAGES):\n        markup = _as_markup(variant_keyboard(post_id, version))",
@@ -119,12 +115,12 @@
       "        pass"
     ],
     "добавлять темы при отказе": [
-      "    if query.data == \"t:no\" or row is None:",
+      "    if parts[1] == \"no\" or row is None:",
       "    if row is None:"
     ],
     "пускать постороннего к темам": [
-      "    if not _mine(projects, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return",
-      "    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return"
+      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if not _mine(projects, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return",
+      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return"
     ],
     "пускать постороннего к паузе": [
       "    mine = _mine(projects, user_id)\n    if not mine:\n        return NOT_YOURS\n\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)",
@@ -142,9 +138,21 @@
       "    if published >= allowed:",
       "    if False:"
     ],
-    "считать лимит исчерпанным раньше времени": [
-      "    if published >= allowed:",
-      "    if published >= allowed - 1:"
+    "не говорить, сколько тем не поместилось": [
+      "    return [f\"  …и ещё {total - shown}\"] if total > shown else []",
+      "    return []"
+    ],
+    "не показывать запас": [
+      "        lines.append(f\"\\n📋 В запасе ({counts.free}), по очереди:\")",
+      "        lines.append(\"\")"
+    ],
+    "не показывать отработанные темы": [
+      "    finished = topics.done(conn, project_id)",
+      "    finished = []"
+    ],
+    "не показывать, что в работе": [
+      "    working = topics.in_progress(conn, project_id)",
+      "    working = []"
     ]
   }
 }

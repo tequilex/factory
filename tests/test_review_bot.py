@@ -489,6 +489,24 @@ class TestCancelButton:
         assert len(buttons) == 1
         assert "снова" in buttons[0].text
 
+    def test_a_post_that_just_went_out_says_so_before_the_state_catches_up(self, bot_env):
+        """Между записью номера поста и сменой состояния есть окно.
+
+        Пост в этот момент уже в группе, но числится одобренным. Ответ «уже
+        одобрен, ждёт публикации» в это окно — неправда: публиковать больше
+        нечего, а отменить нельзя.
+        """
+        conn, post_id = bot_env["conn"], bot_env["post_id"]
+        bot_env["press"](f"r:{post_id}:ok")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE posts SET external_id = ? WHERE id = ?", ("-1_7", post_id)
+            )
+
+        query = bot_env["press"](f"r:{post_id}:back")
+
+        assert "уже вышел" in query.said
+
     def test_cancelling_a_published_post_says_why_not(self, bot_env):
         """Общее «решение уже принято» тут вводит в заблуждение."""
         bot_env["press"](f"r:{bot_env['post_id']}:ok")

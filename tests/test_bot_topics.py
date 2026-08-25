@@ -73,8 +73,8 @@ class TestTopicsCommand:
         message = bot["send"]("on_topics")
 
         text = message.answered[0]
-        assert "свободных: 1" in text
-        assert "в работе: 0" in text
+        assert "В запасе (1)" in text
+        assert "тем всего: 1" in text
 
     def test_it_lists_what_is_coming(self, bot):
         topics.add(bot["conn"], bot["project_id"], ["Первая", "Вторая"])
@@ -91,7 +91,7 @@ class TestTopicsCommand:
 
         text = bot["send"]("on_topics").answered[0]
 
-        assert "Свободных тем нет" in text
+        assert "В запасе пусто" in text
         assert "списком" in text
 
     def test_a_long_queue_is_not_dumped_whole(self, bot):
@@ -101,7 +101,8 @@ class TestTopicsCommand:
         text = bot["send"]("on_topics").answered[0]
 
         assert "и ещё" in text
-        assert text.count("•") <= topics.PREVIEW
+        listed = [line for line in text.splitlines() if line.strip()[:2].rstrip(".").isdigit()]
+        assert len(listed) <= topics.PREVIEW
 
     def test_a_stranger_sees_nothing(self, bot):
         assert "не для вас" in bot["send"]("on_topics", user=STRANGER).answered[0]
@@ -116,7 +117,7 @@ class TestTopicsCommand:
 
         text = bot["send"]("on_topics").answered[0]
 
-        assert "свободных: 1" in text
+        assert "В запасе (1)" in text
         assert "Чужая" not in text
 
     def test_the_order_is_the_order_they_will_be_taken(self, bot):
@@ -125,7 +126,11 @@ class TestTopicsCommand:
 
         text = bot["send"]("on_topics").answered[0]
 
-        shown = [line.strip("  • ") for line in text.splitlines() if line.strip().startswith("•")]
+        shown = [
+            line.split(". ", 1)[1]
+            for line in text.splitlines()
+            if line.strip()[:2].rstrip(".").isdigit() and ". " in line
+        ]
         assert shown.index("Первая") < shown.index("Вторая") < shown.index("Третья")
 
 
@@ -526,3 +531,139 @@ class TestSchedule:
 
         assert topics.schedule_is_off(bot["conn"], "demo")
         assert not topics.schedule_is_off(bot["conn"], "другой")
+
+
+class TestTopicListsTellTheWholeStory:
+    """Числа отвечают на «сколько», а спрашивают обычно «а что именно».
+
+    Без списков нельзя ни понять, чем кормить систему дальше, ни вспомнить,
+    о чём уже выходило, — и темы начинают повторяться.
+    """
+
+    def in_work(self, bot, title, state):
+        from tests.conftest import insert_post, insert_topic
+
+        conn = bot["conn"]
+        topic = insert_topic(conn, bot["project_id"], title)
+        post = insert_post(conn, bot["project_id"], topic, idem_key=f"demo:{topic}:0")
+        with db.write_transaction(conn):
+            conn.execute("UPDATE topics SET status = ? WHERE id = ?", (TopicStatus.TAKEN, topic))
+            conn.execute("UPDATE posts SET state = ? WHERE id = ?", (state, post))
+        return post
+
+    def finished(self, bot, title, external_id=None):
+        from tests.conftest import insert_post, insert_topic
+
+        conn = bot["conn"]
+        topic = insert_topic(conn, bot["project_id"], title)
+        post = insert_post(conn, bot["project_id"], topic, idem_key=f"demo:{topic}:0")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE topics SET status = ?, used_at = ? WHERE id = ?",
+                (TopicStatus.USED, "2026-08-25T12:00:00Z", topic),
+            )
+            conn.execute(
+                "UPDATE posts SET state = ?, external_id = ? WHERE id = ?",
+                (State.PUBLISHED if external_id else State.REJECTED, external_id, post),
+            )
+
+    def test_a_topic_in_work_shows_which_step_it_is_on(self, bot):
+        """«В работе» одинаково у поста, ждущего решения, и у сломавшегося час назад."""
+        self.in_work(bot, "Ждёт меня", State.IN_REVIEW)
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert "Ждёт меня — ждёт вашего решения" in text
+
+    def test_every_step_has_human_words(self, bot):
+        for state, word in [
+            (State.QUEUED, "пишется текст"),
+            (State.APPROVED, "одобрен, ждёт слота"),
+            (State.FAILED, "сломался"),
+        ]:
+            assert topics.STATE_WORDS[state] == word
+
+    def test_a_published_topic_comes_with_a_link(self, bot):
+        """Чтобы посмотреть, что вышло, не листая группу."""
+        self.finished(bot, "Уже вышла", external_id="-111222333_10")
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert "Уже вышла — https://vk.com/wall-111222333_10" in text
+
+    def test_a_topic_closed_without_a_post_says_so(self, bot):
+        self.finished(bot, "Закрыта впустую")
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert "Закрыта впустую — закрыта без поста" in text
+
+    def test_the_freshest_finished_topics_come_first(self, bot):
+        """Спрашивают «что сделано» про последнее, а не про самое первое."""
+        conn = bot["conn"]
+        self.finished(bot, "Позавчерашняя", external_id="-1_1")
+        self.finished(bot, "Сегодняшняя", external_id="-1_2")
+        with db.write_transaction(conn):
+            conn.execute(
+                "UPDATE topics SET used_at = ? WHERE title = ?",
+                ("2026-08-20T10:00:00Z", "Позавчерашняя"),
+            )
+            conn.execute(
+                "UPDATE topics SET used_at = ? WHERE title = ?",
+                ("2026-08-25T10:00:00Z", "Сегодняшняя"),
+            )
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert text.index("Сегодняшняя") < text.index("Позавчерашняя")
+
+    def test_the_three_lists_do_not_mix(self, bot):
+        self.in_work(bot, "Делается", State.QUEUED)
+        self.finished(bot, "Сделана", external_id="-1_3")
+
+        text = bot["send"]("on_topics").answered[0]
+
+        reserve = text.index("В запасе")
+        working = text.index("В работе")
+        finished = text.index("Отработано")
+        assert reserve < working < finished
+        assert reserve < text.index("Как выбрать шины") < working
+        assert working < text.index("Делается") < finished
+        assert finished < text.index("Сделана")
+
+    def test_long_lists_say_how_many_are_hidden(self, bot):
+        for number in range(topics.PREVIEW + 5):
+            self.finished(bot, f"Вышла {number}", external_id=f"-1_{number}")
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert "…и ещё 5" in text
+
+    def test_another_projects_topics_never_appear(self, bot):
+        """Во всех трёх списках, а не только в запасе.
+
+        Чужая отработанная тема в разделе «сделано» — это чужой пост, выданный
+        за свой, и повод не написать о том, о чём на самом деле не писали.
+        """
+        from tests.conftest import insert_post, insert_project, insert_topic
+
+        conn = bot["conn"]
+        other = insert_project(conn, "чужой")
+        insert_topic(conn, other, "Чужая в запасе")
+
+        for title, status, state in (
+            ("Чужая в работе", TopicStatus.TAKEN, State.IN_REVIEW),
+            ("Чужая сделана", TopicStatus.USED, State.PUBLISHED),
+        ):
+            topic = insert_topic(conn, other, title)
+            post = insert_post(conn, other, topic, idem_key=f"чужой:{topic}:0")
+            with db.write_transaction(conn):
+                conn.execute("UPDATE topics SET status = ? WHERE id = ?", (status, topic))
+                conn.execute(
+                    "UPDATE posts SET state = ?, external_id = ? WHERE id = ?",
+                    (state, "-9_9", post),
+                )
+
+        text = bot["send"]("on_topics").answered[0]
+
+        assert "Чужая" not in text

@@ -57,6 +57,30 @@
     "не возвращать расписание обратно": [
       "            conn.execute(\"DELETE FROM meta WHERE key = ?\", (key,))",
       "            pass"
+    ],
+    "не показывать, на каком шаге пост": [
+      "            note=STATE_WORDS.get(row[\"state\"] or \"\", \"готовится\"),",
+      "            note=\"готовится\","
+    ],
+    "показывать отработанные от старых к свежим": [
+      "        \"ORDER BY COALESCE(t.used_at, '') DESC, t.id DESC LIMIT ?\",",
+      "        \"ORDER BY COALESCE(t.used_at, '') ASC, t.id ASC LIMIT ?\","
+    ],
+    "не давать ссылку на вышедший пост": [
+      "                url=f\"https://vk.com/wall{external}\" if external else None,",
+      "                url=None,"
+    ],
+    "выдавать выброшенную тему за опубликованную": [
+      "                note=\"опубликован\" if external else \"закрыта без поста\",",
+      "                note=\"опубликован\","
+    ],
+    "смешивать отработанные темы чужих проектов": [
+      "        \"WHERE t.project_id = ? AND t.status = ? \"\n        \"ORDER BY COALESCE(t.used_at, '') DESC, t.id DESC LIMIT ?\",",
+      "        \"WHERE ? IS NOT NULL AND t.status = ? \"\n        \"ORDER BY COALESCE(t.used_at, '') DESC, t.id DESC LIMIT ?\","
+    ],
+    "показывать в работе темы чужих проектов": [
+      "        \"WHERE t.project_id = ? AND t.status = ? ORDER BY t.id LIMIT ?\",\n        (project_id, TopicStatus.TAKEN, limit),",
+      "        \"WHERE ? IS NOT NULL AND t.status = ? ORDER BY t.id LIMIT ?\",\n        (project_id, TopicStatus.TAKEN, limit),"
     ]
   }
 }

@@ -84,6 +84,30 @@ def counts(conn: sqlite3.Connection, project_id: int) -> Counts:
     )
 
 
+#: Состояние поста человеческим языком. Владелец не обязан знать названия
+#: состояний машины, ему нужно понимать, чего ждать.
+STATE_WORDS: dict[str, str] = {
+    "queued": "пишется текст",
+    "text_ready": "проверяются факты",
+    "factchecked": "придумываются сцены",
+    "prompts_ready": "рисуются картинки",
+    "images_ready": "собирается обложка",
+    "composed": "отправляется вам",
+    "in_review": "ждёт вашего решения",
+    "approved": "одобрен, ждёт слота",
+    "failed": "сломался",
+}
+
+
+@dataclass(frozen=True)
+class TopicLine:
+    """Тема и что с ней происходит."""
+
+    title: str
+    note: str
+    url: str | None = None
+
+
 def upcoming(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) -> list[str]:
     """Ближайшие свободные темы — в том порядке, в котором их возьмут."""
     rows = conn.execute(
@@ -93,13 +117,51 @@ def upcoming(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) ->
     return [row["title"] for row in rows]
 
 
-def in_progress(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) -> list[str]:
-    """Темы, по которым уже пишется пост."""
+def in_progress(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) -> list[TopicLine]:
+    """Темы, по которым пишется пост, — с тем, на каком он шаге.
+
+    Без шага список бесполезен: «в работе» одинаково выглядит и у поста,
+    который ждёт решения владельца, и у того, который сломался час назад.
+    """
     rows = conn.execute(
-        "SELECT title FROM topics WHERE project_id = ? AND status = ? ORDER BY id LIMIT ?",
+        "SELECT t.title, p.state FROM topics t "
+        "LEFT JOIN posts p ON p.topic_id = t.id AND p.state NOT IN ('published', 'rejected') "
+        "WHERE t.project_id = ? AND t.status = ? ORDER BY t.id LIMIT ?",
         (project_id, TopicStatus.TAKEN, limit),
     ).fetchall()
-    return [row["title"] for row in rows]
+    return [
+        TopicLine(
+            title=row["title"],
+            note=STATE_WORDS.get(row["state"] or "", "готовится"),
+        )
+        for row in rows
+    ]
+
+
+def done(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) -> list[TopicLine]:
+    """Отработанные темы — со ссылкой на вышедший пост.
+
+    Свежие сверху: «что сделано» спрашивают про последнее, а не про первое.
+    """
+    rows = conn.execute(
+        "SELECT t.title, p.external_id FROM topics t "
+        "LEFT JOIN posts p ON p.topic_id = t.id AND p.state = 'published' "
+        "WHERE t.project_id = ? AND t.status = ? "
+        "ORDER BY COALESCE(t.used_at, '') DESC, t.id DESC LIMIT ?",
+        (project_id, TopicStatus.USED, limit),
+    ).fetchall()
+
+    lines = []
+    for row in rows:
+        external = row["external_id"]
+        lines.append(
+            TopicLine(
+                title=row["title"],
+                note="опубликован" if external else "закрыта без поста",
+                url=f"https://vk.com/wall{external}" if external else None,
+            )
+        )
+    return lines
 
 
 def set_paused(conn: sqlite3.Connection, slug: str, paused: bool) -> bool:
