@@ -183,7 +183,13 @@ class TestFailedPosts:
 
         assert "сломался" in message
         assert "ошибка 5" in message, "владельцу не сказали причину"
-        assert f"factory post retry {watched['post_id']}" in message
+        # Раньше здесь стояла команда для терминала — то есть владельцу,
+        # который живёт в телефоне, предлагалось сделать невозможное.
+        assert "кнопкой ниже" in message
+        keyboard = watched["providers"].notifier.alert_keyboards[-1]
+        assert keyboard is not None, "кнопки починки не пришло"
+        button = keyboard["inline_keyboard"][0][0]
+        assert button["callback_data"] == f"r:{watched['post_id']}:fix"
 
     def test_it_is_reported_once(self, watched):
         with db.write_transaction(watched["conn"]):

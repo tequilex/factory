@@ -288,7 +288,9 @@ class TestKeyboard:
         keyboard = review_keyboard(7)
         flat = [button for row in keyboard["inline_keyboard"] for button in row]
 
-        expected = [d for d in Decision if d is not Decision.CANCEL]
+        # Отмена и починка появляются отдельными кнопками в других местах:
+        # первая после одобрения, вторая под сообщением о поломке.
+        expected = [d for d in Decision if d not in (Decision.CANCEL, Decision.RETRY)]
         assert len(flat) == len(expected)
         carried = {button["callback_data"].split(":")[2] for button in flat}
         assert carried == {d.value for d in expected}

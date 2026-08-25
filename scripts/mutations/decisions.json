@@ -1,6 +1,7 @@
 {
   "module": "factory/core/decisions.py",
   "tests": [
+    "tests/test_bot_topics.py",
     "tests/test_decisions.py",
     "tests/test_versions.py"
   ],
@@ -112,6 +113,18 @@
     "мусор тоже заводит вариант": [
       "            version = _next_version(conn, post_id) if decision is not Decision.TRASH else None",
       "            version = _next_version(conn, post_id)"
+    ],
+    "починка считается одобрением": [
+      "        touches_decision = decision is not Decision.RETRY",
+      "        touches_decision = True"
+    ],
+    "починка заводит новый вариант": [
+      "            fresh = decision not in (Decision.TRASH, Decision.RETRY)",
+      "            fresh = decision is not Decision.TRASH"
+    ],
+    "чинить можно любой пост": [
+      "    Decision.RETRY: State.FAILED,",
+      "    Decision.RETRY: State.IN_REVIEW,"
     ]
   }
 }

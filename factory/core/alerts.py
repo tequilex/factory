@@ -56,7 +56,14 @@ def is_raised(conn: sqlite3.Connection, name: str, scope: str) -> bool:
 
 
 def raise_once(
-    conn: sqlite3.Connection, notifier, *, chat_id: int, name: str, scope: str, text: str
+    conn: sqlite3.Connection,
+    notifier,
+    *,
+    chat_id: int,
+    name: str,
+    scope: str,
+    text: str,
+    keyboard: dict | None = None,
 ) -> bool:
     """Отправить тревогу, если она ещё не висит. ``True`` — отправили.
 
@@ -67,7 +74,7 @@ def raise_once(
         return False
 
     try:
-        notifier.alert(chat_id=chat_id, text=text)
+        notifier.alert(chat_id=chat_id, text=text, keyboard=keyboard)
     except Exception as exc:  # noqa: BLE001 — см. ниже
         # Ловится всё, а не только FactoryError: провайдер отдаёт наружу и
         # httpx.ReadTimeout, а сеть до Telegram отвечает неровно. Уведомление о
@@ -158,5 +165,5 @@ def failed_post_text(project: str, post_id: int, title: str | None, error: str |
         f"❌ [{project}] Пост {post_id} сломался окончательно.\n\n"
         f"«{title or 'без заголовка'}»\n\n"
         f"{(error or 'причина не записана').strip()[:900]}\n\n"
-        f"Починив причину, вернуть пост в работу: factory post retry {post_id}"
+        "Починив причину, вернуть пост в работу можно кнопкой ниже."
     )

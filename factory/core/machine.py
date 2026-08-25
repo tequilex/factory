@@ -23,6 +23,7 @@ from factory.core.config import ProjectConfig, load_project
 from factory.core.errors import FactoryError
 from factory.core.logging import get_logger
 from factory.core.models import TERMINAL_STATES, Post, Project, State, TopicStatus
+from factory.providers.notifiers.telegram import retry_keyboard
 from factory.core.steps import Outcome, StepContext, handler_for
 from factory.providers.registry import build_providers
 
@@ -423,6 +424,7 @@ def _alert_failed_posts(conn, project, config, providers, chat_id: int) -> None:
             text=alerts.failed_post_text(
                 config.slug, row["id"], row["title"], row["last_error"]
             ),
+            keyboard=retry_keyboard(row["id"]),
         )
 
 

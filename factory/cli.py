@@ -16,6 +16,7 @@ from pathlib import Path
 import typer
 
 from factory.core import alerts
+from factory.core import topics as topics_core
 from factory.core import config as config_module
 from factory.core import db, lock, machine, paths
 from factory.core.clock import now_utc, to_iso
@@ -270,8 +271,9 @@ def project_pause(slug: str) -> None:
     """Поставить проект на паузу: посты перестанут создаваться и двигаться."""
     conn = open_database()
     project_row(conn, slug)
-    with db.write_transaction(conn):
-        conn.execute("UPDATE projects SET is_active = 0 WHERE slug = ?", (slug,))
+    # Тот же код, что у команды /pause в боте: пауза обязана означать одно и то
+    # же, откуда бы её ни поставили.
+    topics_core.set_paused(conn, slug, True)
     conn.close()
     typer.echo(f"Проект '{slug}' на паузе. Ничего не удалено, снять: factory project resume {slug}")
 
@@ -281,8 +283,7 @@ def project_resume(slug: str) -> None:
     """Снять проект с паузы."""
     conn = open_database()
     project_row(conn, slug)
-    with db.write_transaction(conn):
-        conn.execute("UPDATE projects SET is_active = 1 WHERE slug = ?", (slug,))
+    topics_core.set_paused(conn, slug, False)
     conn.close()
     typer.echo(f"Проект '{slug}' снова в работе.")
 
@@ -305,29 +306,14 @@ def topics_import(
     conn = open_database()
     project = project_row(conn, slug)
 
-    existing = {
-        row["title"]
-        for row in conn.execute(
-            "SELECT title FROM topics WHERE project_id = ?", (project.id,)
-        ).fetchall()
-    }
-
-    added = skipped = 0
-    with db.write_transaction(conn):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            title = line.strip()
-            if not title or title in existing:
-                skipped += 1
-                continue
-            conn.execute(
-                "INSERT INTO topics (project_id, title, status) VALUES (?, ?, 'free')",
-                (project.id, title),
-            )
-            existing.add(title)
-            added += 1
+    # Общий код с ботом: правила добавления должны быть одни и те же, откуда
+    # бы темы ни пришли — из файла или сообщением в Telegram.
+    result = topics_core.add(conn, project.id, path.read_text(encoding="utf-8").splitlines())
     conn.close()
 
-    typer.echo(f"Загружено тем: {added}. Пропущено (пустые и повторы): {skipped}.")
+    typer.echo(
+        f"Загружено тем: {result.added}. Пропущено (пустые и повторы): {result.skipped}."
+    )
 
 
 @topics_app.command("list")

@@ -55,6 +55,9 @@ class Decision(StrEnum):
     SCENES = "scn"
     TEXT = "txt"
     TRASH = "del"
+    #: Починить сломанный пост: вернуть в цепочку с чистым счётом попыток.
+    #: Не решение о содержании — поэтому не считается ни одобрением, ни отказом.
+    RETRY = "fix"
 
 
 #: Куда откатывается пост и по какой причине это записывается в ``rejections``.
@@ -66,6 +69,7 @@ TARGET_STATE: dict[Decision, State] = {
     Decision.SCENES: State.FACTCHECKED,
     Decision.TEXT: State.QUEUED,
     Decision.TRASH: State.REJECTED,
+    Decision.RETRY: State.QUEUED,
 }
 
 REJECTION_REASON: dict[Decision, RejectionReason | None] = {
@@ -75,6 +79,7 @@ REJECTION_REASON: dict[Decision, RejectionReason | None] = {
     Decision.SCENES: RejectionReason.SCENES,
     Decision.TEXT: RejectionReason.TEXT,
     Decision.TRASH: RejectionReason.TRASH,
+    Decision.RETRY: None,
 }
 
 LABEL: dict[Decision, str] = {
@@ -84,6 +89,7 @@ LABEL: dict[Decision, str] = {
     Decision.SCENES: "Другие сцены",
     Decision.TEXT: "Текст заново",
     Decision.TRASH: "В мусор",
+    Decision.RETRY: "Попробовать снова",
 }
 
 
@@ -141,6 +147,7 @@ ALLOWED_FROM: dict[Decision, State] = {
     Decision.TEXT: State.IN_REVIEW,
     Decision.TRASH: State.IN_REVIEW,
     Decision.CANCEL: State.APPROVED,
+    Decision.RETRY: State.FAILED,
 }
 
 
@@ -191,6 +198,11 @@ def apply(
         # Сбрасываются и счётчик попыток, и время следующей: пост возвращается
         # в работу немедленно и с чистым бюджетом, а не с наследством от того,
         # что владелец забраковал. Сообщение с кнопками больше не актуально.
+        # decided_at у починки не ставится: это не решение о содержании, а
+        # «попробуй ещё раз». Проставить его значило бы засчитать сломанный пост
+        # в счёт одобрений подряд и приблизить автопубликацию без ревью.
+        touches_decision = decision is not Decision.RETRY
+
         if decision in (Decision.APPROVE, Decision.CANCEL):
             # Сообщение остаётся тем же: с него владелец отменяет публикацию,
             # если передумал, и на нём же появится ссылка на вышедший пост.
@@ -203,13 +215,27 @@ def apply(
         else:
             # Откат — это заявка на новый вариант, а не правка нынешнего.
             # Номер растёт, и картинки лягут в свою папку, не затирая прежние.
-            version = _next_version(conn, post_id) if decision is not Decision.TRASH else None
+            # Новый вариант заводят только откаты. Мусор переделывать нечего,
+            # а починка возвращает в работу ровно то, что уже сделано, — иначе
+            # владелец потерял бы вариант, который сломался на последнем шаге.
+            #
+            # TODO: подтвердить у владельца. Если «Попробовать снова» чаще будет
+            # означать «сделай заново, этот не удался», то вариант надо
+            # наращивать. Выбрано осторожное: не терять то, что уже готово.
+            fresh = decision not in (Decision.TRASH, Decision.RETRY)
+            version = _next_version(conn, post_id) if fresh else None
             conn.execute(
                 "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
                 "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
                 "review_album_message_id = NULL, version = COALESCE(?, version), "
-                "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
-                (target, version, stamp, by, stamp, post_id),
+                "decided_at = COALESCE(?, decided_at), decided_by = COALESCE(?, decided_by), "
+                "updated_at = ? WHERE id = ?",
+                (
+                    target, version,
+                    stamp if touches_decision else None,
+                    by if touches_decision else None,
+                    stamp, post_id,
+                ),
             )
 
     log.info(

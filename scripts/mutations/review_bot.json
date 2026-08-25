@@ -1,6 +1,7 @@
 {
   "module": "factory/bot/review_bot.py",
   "tests": [
+    "tests/test_bot_topics.py",
     "tests/test_edits.py",
     "tests/test_review_bot.py"
   ],
@@ -108,6 +109,34 @@
     "вести кнопку варианта на текущий": [
       "        markup = _as_markup(variant_keyboard(post_id, version))",
       "        markup = _as_markup(variant_keyboard(post_id, version + 1))"
+    ],
+    "добавлять темы без подтверждения": [
+      "    preview = \"\\n\".join(f\"• {line}\" for line in lines[:5])",
+      "    topics.add(conn, 1, lines)\n    preview = \"\\n\".join(f\"• {line}\" for line in lines[:5])"
+    ],
+    "не забывать список после подтверждения": [
+      "        conn.execute(\"DELETE FROM meta WHERE key = ?\", (key,))",
+      "        pass"
+    ],
+    "добавлять темы при отказе": [
+      "    if query.data == \"t:no\" or row is None:",
+      "    if row is None:"
+    ],
+    "пускать постороннего к темам": [
+      "    if not _mine(projects, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return",
+      "    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return"
+    ],
+    "пускать постороннего к паузе": [
+      "    mine = _mine(projects, user_id)\n    if not mine:\n        return NOT_YOURS\n\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)",
+      "    mine = list(projects.items())\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)"
+    ],
+    "не снимать тревогу о кончившихся темах": [
+      "    alerts.clear(conn, \"no_topics\", payload[\"slug\"])",
+      "    pass"
+    ],
+    "показывать чужие темы": [
+      "        if project.telegram and user_id in project.telegram.reviewers\n    ]",
+      "        if project.telegram\n    ]"
     ]
   }
 }

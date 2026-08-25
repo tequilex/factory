@@ -63,9 +63,21 @@ class FakeQuery:
 
 
 def handler_of(dispatcher, kind: str):
-    """Достать единственный обработчик нужного типа из диспетчера."""
+    """Достать обработчики нужного типа из диспетчера."""
     observer = {"callback": dispatcher.callback_query, "message": dispatcher.message}[kind]
     return observer.handlers
+
+
+def named(dispatcher, kind: str, name: str):
+    """Обработчик по имени функции.
+
+    По номеру выбирать нельзя: добавление любого нового обработчика сдвигает
+    остальные, и тест начинает проверять не то, что заявлено в названии.
+    """
+    for handler in handler_of(dispatcher, kind):
+        if getattr(handler.callback, "__name__", "") == name:
+            return handler
+    raise AssertionError(f"обработчик {name} не найден")
 
 
 def call(coro):
@@ -97,8 +109,7 @@ def bot_env(pipeline):
 
     def press(data: str, user_id: int = OWNER) -> FakeQuery:
         query = FakeQuery(data=data, from_user=FakeUser(user_id))
-        handlers = handler_of(dispatcher, "callback")
-        call(handlers[0].callback(query))
+        call(named(dispatcher, "callback", "on_decision").callback(query))
         return query
 
     pipeline["dispatcher"] = dispatcher
@@ -150,7 +161,7 @@ class TestPermissions:
         dispatcher = review_bot.build_dispatcher(pipeline["conn"], {"чужой": alien})
 
         query = FakeQuery(data=f"r:{pipeline['post_id']}:ok", from_user=FakeUser(OWNER))
-        call(handler_of(dispatcher, "callback")[0].callback(query))
+        call(named(dispatcher, "callback", "on_decision").callback(query))
 
         assert state_of(pipeline) == State.IN_REVIEW
         assert "не для вас" in query.said
@@ -222,7 +233,7 @@ class TestBrokenInput:
             message=FakeMessage(edit_fails=True),
         )
 
-        call(handler_of(bot_env["dispatcher"], "callback")[0].callback(query))
+        call(named(bot_env["dispatcher"], "callback", "on_decision").callback(query))
 
         assert state_of(bot_env) == State.APPROVED
 
@@ -232,7 +243,7 @@ class TestCommands:
         message = FakeMessage()
         message.from_user = FakeUser(OWNER)
 
-        call(handler_of(bot_env["dispatcher"], "message")[0].callback(message))
+        call(named(bot_env["dispatcher"], "message", "on_start").callback(message))
 
         assert message.answered
         assert "/status" in message.answered[0]
@@ -241,7 +252,7 @@ class TestCommands:
         message = FakeMessage()
         message.from_user = FakeUser(OWNER)
 
-        call(handler_of(bot_env["dispatcher"], "message")[1].callback(message))
+        call(named(bot_env["dispatcher"], "message", "on_status").callback(message))
 
         text = message.answered[0]
         assert "demo" in text
@@ -251,7 +262,7 @@ class TestCommands:
         message = FakeMessage()
         message.from_user = FakeUser(STRANGER)
 
-        call(handler_of(bot_env["dispatcher"], "message")[1].callback(message))
+        call(named(bot_env["dispatcher"], "message", "on_status").callback(message))
 
         assert "не для вас" in message.answered[0]
 
@@ -263,7 +274,7 @@ class TestCommands:
         message = FakeMessage()
         message.from_user = FakeUser(OWNER)
 
-        call(handler_of(bot_env["dispatcher"], "message")[1].callback(message))
+        call(named(bot_env["dispatcher"], "message", "on_status").callback(message))
 
         assert "свободных тем: 1" in message.answered[0]
 

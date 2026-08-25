@@ -246,7 +246,9 @@ class TestRollbackImages:
 
 class TestGuards:
     @pytest.mark.parametrize(
-        "decision", [d for d in Decision if d is not Decision.CANCEL]
+        "decision",
+        # Отмена и починка применимы из других состояний — у них свои проверки.
+        [d for d in Decision if d not in (Decision.CANCEL, Decision.RETRY)],
     )
     def test_a_second_press_changes_nothing(self, in_review, decision):
         """Двойное нажатие и нажатие на старое сообщение обязаны быть безвредны."""

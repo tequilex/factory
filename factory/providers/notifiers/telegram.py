@@ -58,6 +58,7 @@ KEYBOARD_ROWS: tuple[tuple[Decision, ...], ...] = (
 
 ICON: dict[Decision, str] = {
     Decision.APPROVE: "✅",
+    Decision.RETRY: "🔧",
     Decision.CANCEL: "↩️",
     Decision.IMAGES: "🔄",
     Decision.SCENES: "🎲",
@@ -131,6 +132,24 @@ def variant_keyboard(post_id: int, version: int) -> dict:
                 {
                     "text": f"{ICON[Decision.APPROVE]} Опубликовать этот вариант",
                     "callback_data": f"r:{post_id}:{Decision.APPROVE.value}:{version}",
+                }
+            ]
+        ]
+    }
+
+
+def retry_keyboard(post_id: int) -> dict:
+    """Кнопка под сообщением о сломанном посте.
+
+    До неё в тексте тревоги стояла команда для терминала — то есть владельцу,
+    который живёт в телефоне, предлагалось сделать невозможное.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": f"{ICON[Decision.RETRY]} {LABEL[Decision.RETRY]}",
+                    "callback_data": f"r:{post_id}:{Decision.RETRY.value}",
                 }
             ]
         ]
@@ -362,8 +381,11 @@ class TelegramNotifier:
             },
         )
 
-    def alert(self, *, chat_id: int, text: str) -> None:
-        self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})
+    def alert(self, *, chat_id: int, text: str, keyboard: dict | None = None) -> None:
+        data: dict[str, Any] = {"chat_id": chat_id, "text": _cut(text)}
+        if keyboard is not None:
+            data["reply_markup"] = _json(keyboard)
+        self._call("sendMessage", data=data)
 
 def _retry_after(payload: dict) -> float | None:
     parameters = payload.get("parameters") or {}

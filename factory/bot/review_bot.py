@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 from factory.core.clock import now_utc
@@ -27,7 +28,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from factory.core import alerts, db, edits, paths, secrets, versions
+from factory.core import alerts, db, edits, paths, secrets, topics, versions
 from factory.core.config import ProjectConfig, load_project, resolve_secret
 from factory.core.decisions import LABEL, Decision, apply
 from factory.core.errors import ConfigError, FactoryError
@@ -50,7 +51,11 @@ START_TEXT = (
     "Сюда приходят готовые посты: сначала картинки, потом текст с кнопками. "
     "Нажатие сразу применяется — пост уходит в группу или возвращается на "
     "доработку.\n\n"
-    "Команда /status покажет, что происходит прямо сейчас.\n\n"
+    "Команды:\n"
+    "/status — что происходит прямо сейчас\n"
+    "/topics — сколько тем осталось\n"
+    "/pause — остановить выпуск, /resume — продолжить\n\n"
+    "Чтобы добавить темы, просто пришлите их списком: по теме в строке.\n\n"
     "Текст можно поправить руками: ответьте на сообщение с постом своим "
     "вариантом, и он его заменит.\n\n"
     "Когда истечёт ключ загрузки картинок в ВК (это бывает раз в сутки), "
@@ -134,10 +139,39 @@ def build_dispatcher(
     async def on_status(message: Message) -> None:
         await message.answer(_status_text(conn, current(), message.from_user.id))
 
+    @dispatcher.message(Command("topics"))
+    async def on_topics(message: Message) -> None:
+        await message.answer(_topics_text(conn, current(), message.from_user.id))
+
+    @dispatcher.message(Command("pause"))
+    async def on_pause(message: Message) -> None:
+        await message.answer(_switch(conn, current(), message.from_user.id, paused=True))
+
+    @dispatcher.message(Command("resume"))
+    async def on_resume(message: Message) -> None:
+        await message.answer(_switch(conn, current(), message.from_user.id, paused=False))
+
+    @dispatcher.callback_query(F.data.startswith("t:"))
+    async def on_topics_answer(query: CallbackQuery) -> None:
+        await _apply_pending_topics(conn, current(), query)
+
     @dispatcher.message(F.reply_to_message)
     async def on_edit(message: Message) -> None:
         """Ответ на сообщение поста — это исправленный текст."""
         await _accept_edit(conn, current(), message)
+
+    @dispatcher.message(F.text & ~F.text.startswith("/") & ~F.text.contains("access_token="))
+    async def on_topics_offer(message: Message) -> None:
+        """Обычное сообщение — это, скорее всего, список тем.
+
+        Переспрашиваем, а не добавляем сразу: случайно отправленное сообщение
+        иначе молча попадёт в очередь и однажды выйдет постом.
+
+        TODO: подтвердить у владельца. Если подтверждение окажется лишним
+        шагом, убрать и добавлять сразу — откатить добавленное можно будет
+        через /topics.
+        """
+        await _offer_topics(conn, current(), message)
 
     @dispatcher.message(F.text.contains("access_token="))
     async def on_vk_token(message: Message) -> None:
@@ -247,6 +281,153 @@ async def _accept_vk_token(
         f"Ключ принят и сохранён ({name}). Ваше сообщение я удалил.\n\n"
         "Публикация продолжится сама в ближайшую минуту — перезапускать ничего "
         "не нужно."
+    )
+
+
+def _mine(projects: dict[str, ProjectConfig], user_id: int) -> list[tuple[str, ProjectConfig]]:
+    """Проекты, которые этот человек вправе смотреть и трогать."""
+    return [
+        (slug, project)
+        for slug, project in projects.items()
+        if project.telegram and user_id in project.telegram.reviewers
+    ]
+
+
+def _topics_text(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], user_id: int
+) -> str:
+    mine = _mine(projects, user_id)
+    if not mine:
+        return NOT_YOURS
+
+    blocks = []
+    for slug, _ in mine:
+        row = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
+        if row is None:
+            continue
+        counts = topics.counts(conn, row["id"])
+        lines = [
+            f"[{slug}]",
+            f"  свободных: {counts.free}",
+            f"  в работе: {counts.taken}",
+            f"  израсходовано: {counts.used}",
+        ]
+        upcoming = topics.upcoming(conn, row["id"])
+        if upcoming:
+            lines.append("\n  Ближайшие:")
+            lines += [f"  • {title}" for title in upcoming]
+            if counts.free > len(upcoming):
+                lines.append(f"  …и ещё {counts.free - len(upcoming)}")
+        else:
+            lines.append("\n  Свободных тем нет. Пришлите новые списком, по теме в строке.")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _switch(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], user_id: int, *, paused: bool
+) -> str:
+    mine = _mine(projects, user_id)
+    if not mine:
+        return NOT_YOURS
+
+    for slug, _ in mine:
+        topics.set_paused(conn, slug, paused)
+
+    names = ", ".join(slug for slug, _ in mine)
+    if paused:
+        return (
+            f"⏸ Остановлено: {names}.\n\n"
+            "Новые посты не готовятся, публикаций не будет. Уже одобренные тоже "
+            "подождут. Продолжить — /resume."
+        )
+    return f"▶️ Продолжаем: {names}."
+
+
+def _pending_key(user_id: int) -> str:
+    return f"pending_topics:{user_id}"
+
+
+async def _offer_topics(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
+) -> None:
+    from factory.core.clock import now_utc as _now
+    from factory.core.clock import to_iso as _iso
+
+    mine = _mine(projects, message.from_user.id)
+    if not mine:
+        await message.answer(NOT_YOURS)
+        return
+
+    lines = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
+    if not lines:
+        return
+
+    slug = mine[0][0]
+    stamp = _iso(_now())
+    with db.write_transaction(conn):
+        conn.execute(
+            "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (_pending_key(message.from_user.id), json.dumps({"slug": slug, "lines": lines}), stamp),
+        )
+
+    preview = "\n".join(f"• {line}" for line in lines[:5])
+    tail = f"\n…и ещё {len(lines) - 5}" if len(lines) > 5 else ""
+    await message.answer(
+        f"Добавить {_plural(len(lines))} в очередь [{slug}]?\n\n{preview}{tail}",
+        reply_markup=_as_markup(
+            {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Добавить", "callback_data": "t:add"},
+                        {"text": "✖️ Не надо", "callback_data": "t:no"},
+                    ]
+                ]
+            }
+        ),
+    )
+
+
+def _plural(count: int) -> str:
+    tail = "тем" if count % 10 == 0 or count % 10 >= 5 or 11 <= count % 100 <= 14 else (
+        "тему" if count % 10 == 1 else "темы"
+    )
+    return f"{count} {tail}"
+
+
+async def _apply_pending_topics(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery
+) -> None:
+    if not _mine(projects, query.from_user.id):
+        await query.answer(NOT_YOURS, show_alert=True)
+        return
+
+    key = _pending_key(query.from_user.id)
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    with db.write_transaction(conn):
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+    await _drop_keyboard(query)
+
+    if query.data == "t:no" or row is None:
+        await query.answer("Не добавляю.")
+        return
+
+    payload = json.loads(row["value"])
+    project = conn.execute(
+        "SELECT id FROM projects WHERE slug = ?", (payload["slug"],)
+    ).fetchone()
+    if project is None:
+        await query.answer("Проект не подключён.", show_alert=True)
+        return
+
+    result = topics.add(conn, project["id"], payload["lines"])
+    alerts.clear(conn, "no_topics", payload["slug"])
+    await query.answer(f"Добавлено: {result.added}")
+    await query.message.answer(
+        f"Добавлено тем: {result.added}. Пропущено (повторы и пустые): {result.skipped}."
     )
 
 
@@ -401,6 +582,11 @@ async def _confirm(
             "Этот вариант никуда не делся: кнопка под ним осталась."
         ),
         Decision.TRASH: "🗑 Пост выброшен, тема вернулась в очередь.",
+        Decision.RETRY: (
+            "🔧 Пост вернулся в работу с чистым счётом попыток.\n\n"
+            "Если причина поломки не устранена, он сломается снова — тогда я "
+            "напишу ещё раз."
+        ),
     }[decision]
     try:
         await query.message.answer(text)
