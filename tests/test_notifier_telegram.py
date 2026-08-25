@@ -36,7 +36,13 @@ class Recorder:
         self.requests.append(request)
         if callable(self.response):
             return self.response(request)
-        return self.response or httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+        if self.response is not None:
+            return self.response
+        # sendMediaGroup отвечает списком сообщений, остальные методы — одним.
+        # Отвечать одинаково значило бы проверять код против выдумки.
+        if request.url.path.endswith("sendMediaGroup"):
+            return httpx.Response(200, json={"ok": True, "result": [{"message_id": 100}]})
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
 
     def methods(self) -> list[str]:
         return [request.url.path.rsplit("/", 1)[-1] for request in self.requests]
@@ -73,6 +79,21 @@ def notifier(recorder, monkeypatch) -> TelegramNotifier:
     return TelegramNotifier(token=TOKEN)
 
 
+def send_review(client, *, project, title, body, warning, images, post_id=7):
+    """Отправка на ревью целиком: альбом, затем текст ответом на него.
+
+    В боевом коде этим управляет шаг — он решает, слать ли картинки повторно.
+    Здесь склеено, чтобы проверять сами запросы к Telegram.
+    """
+    album_id = client.send_album(
+        chat_id=123456789, caption=f"[{project}] {title}", images=images
+    )
+    return client.send_review_text(
+        chat_id=123456789, project=project, title=title, body=body,
+        warning=warning, post_id=post_id, reply_to=album_id,
+    )
+
+
 @pytest.fixture
 def images(tmp_path):
     paths = []
@@ -91,20 +112,14 @@ class TestSendForReview:
             200, json={"ok": True, "result": {"message_id": 42}}
         )
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Тело поста", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело поста", warning=None, images=images)
 
         assert recorder.methods() == ["sendMediaGroup", "sendMessage"]
 
     def test_all_images_are_attached(self, monkeypatch, images):
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Тело", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело", warning=None, images=images)
 
         media = json.loads(recorder.form("sendMediaGroup")["media"])
         assert len(media) == len(images)
@@ -114,10 +129,7 @@ class TestSendForReview:
         """Без подписи два сообщения читаются как «картинки, потом непонятный текст»."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Как выбрать шины",
-            body="Тело", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Как выбрать шины", body="Тело", warning=None, images=images)
 
         media = json.loads(recorder.form("sendMediaGroup")["media"])
         assert media[0]["caption"] == "[vk_demo] Как выбрать шины"
@@ -126,10 +138,7 @@ class TestSendForReview:
         """Telegram показывает подпись у первого вложения; на остальных это мусор."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Тело", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело", warning=None, images=images)
 
         media = json.loads(recorder.form("sendMediaGroup")["media"])
         assert all("caption" not in item for item in media[1:])
@@ -138,10 +147,7 @@ class TestSendForReview:
         """Telegram не разрешает кнопки на медиагруппе — только на сообщении."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Тело", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело", warning=None, images=images)
 
         assert "reply_markup" not in recorder.form("sendMediaGroup")
         keyboard = json.loads(recorder.form("sendMessage")["reply_markup"])
@@ -151,10 +157,7 @@ class TestSendForReview:
         """При двух нишах иначе не понять, в какую группу уйдёт пост."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="автоняша", title="Заголовок",
-            body="Тело", warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="автоняша", title="Заголовок", body="Тело", warning=None, images=images)
 
         assert "автоняша" in recorder.form("sendMessage")["text"]
 
@@ -163,20 +166,14 @@ class TestSendForReview:
         body = "Ы" * 1400
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body=body, warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body=body, warning=None, images=images)
 
         assert body in recorder.form("sendMessage")["text"]
 
     def test_a_factcheck_warning_is_shown(self, monkeypatch, images):
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок", body="Тело",
-            warning="фактчек не уверен в дате", images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело", warning="фактчек не уверен в дате", images=images)
 
         assert "фактчек не уверен в дате" in recorder.form("sendMessage")["text"]
 
@@ -184,10 +181,7 @@ class TestSendForReview:
         """Лимит Telegram — 4096. Обрезать надо заметно, а не молча."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Я" * 9000, warning=None, images=images, post_id=7,
-        )
+        send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Я" * 9000, warning=None, images=images)
 
         text = recorder.form("sendMessage")["text"]
         assert len(text) <= MAX_MESSAGE_LENGTH
@@ -195,12 +189,16 @@ class TestSendForReview:
 
     def test_the_message_id_comes_back(self, monkeypatch, images):
         """Без него нельзя снять кнопки после решения."""
-        recorder = Recorder(httpx.Response(200, json={"ok": True, "result": {"message_id": 4242}}))
-
-        message = notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок",
-            body="Тело", warning=None, images=images, post_id=7,
+        recorder = Recorder(
+            lambda r: httpx.Response(
+                200,
+                json={"ok": True, "result": [{"message_id": 100}]}
+                if r.url.path.endswith("sendMediaGroup")
+                else {"ok": True, "result": {"message_id": 4242}},
+            )
         )
+
+        message = send_review(notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок", body="Тело", warning=None, images=images)
 
         assert message.chat_id == 123456789
         assert message.message_id == 4242
@@ -209,9 +207,9 @@ class TestSendForReview:
         """Пропавший файл — не повод не показать владельцу текст."""
         recorder = Recorder()
 
-        notifier(recorder, monkeypatch).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок", body="Тело",
-            warning=None, images=["/нет/такого.jpg"], post_id=7,
+        send_review(
+            notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=["/нет/такого.jpg"],
         )
 
         assert recorder.methods() == ["sendMessage"]
@@ -369,10 +367,22 @@ class TestConnectFailuresAreRetried:
             attempts["n"] += 1
             raise httpx.ReadTimeout("не дождались ответа")
 
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(ProviderError) as excinfo:
             self.notifier_with(monkeypatch, hangs).alert(chat_id=123456789, text="привет")
 
         assert attempts["n"] == 1, "повторили запрос, который мог дойти"
+        assert excinfo.value.delivered_unknown is True
+
+    def test_a_failure_to_connect_is_marked_as_never_sent(self, monkeypatch):
+        """По этому признаку шаг решает, можно ли слать альбом заново."""
+
+        def dead(request):
+            raise httpx.ConnectTimeout("handshake timed out")
+
+        with pytest.raises(ProviderError) as excinfo:
+            self.notifier_with(monkeypatch, dead).alert(chat_id=123456789, text="привет")
+
+        assert excinfo.value.delivered_unknown is False
 
     def test_giving_up_explains_the_proxy(self, monkeypatch):
         def dead(request):
@@ -394,10 +404,63 @@ class TestConnectFailuresAreRetried:
                 raise httpx.ConnectTimeout("handshake timed out")
             return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
-        self.notifier_with(monkeypatch, flaky).send_for_review(
-            chat_id=123456789, project="vk_demo", title="Заголовок", body="Тело",
-            warning=None, images=images, post_id=7,
+        send_review(
+            self.notifier_with(monkeypatch, flaky), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=images,
         )
 
         assert seen.count("sendMediaGroup") == 2, "первый заход не состоялся, второй — доставка"
         assert seen.count("sendMessage") == 1
+
+
+class TestTextRepliesToTheAlbum:
+    """Связь между картинками и текстом показывает Telegram, а не память.
+
+    При сбоях порядок отправки сбивается: на живом прогоне владелец увидел
+    альбом одного поста и следом текст другого, и решил, что система перепутала.
+    """
+
+    def test_the_text_replies_to_the_album_message(self, monkeypatch, images):
+        recorder = Recorder()
+
+        send_review(
+            notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=images,
+        )
+
+        assert recorder.form("sendMessage")["reply_to_message_id"] == "100"
+
+    def test_a_deleted_album_does_not_block_the_text(self, monkeypatch, images):
+        """Владелец мог удалить картинки — кнопки всё равно должны прийти."""
+        recorder = Recorder()
+
+        send_review(
+            notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=images,
+        )
+
+        assert recorder.form("sendMessage")["allow_sending_without_reply"] == "true"
+
+    def test_without_an_album_nothing_is_replied_to(self, monkeypatch):
+        recorder = Recorder()
+
+        send_review(
+            notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=[],
+        )
+
+        assert "reply_to_message_id" not in recorder.form("sendMessage")
+
+    def test_an_unexpected_answer_does_not_lose_the_album(self, monkeypatch, images):
+        """Не разобрали номер — текст уйдёт отдельно, но картинки не пропадут."""
+        recorder = Recorder(
+            lambda r: httpx.Response(200, json={"ok": True, "result": {"message_id": 7}})
+        )
+
+        message = send_review(
+            notifier(recorder, monkeypatch), project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=images,
+        )
+
+        assert message.message_id == 7
+        assert "sendMediaGroup" in recorder.methods()

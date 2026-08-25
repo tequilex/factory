@@ -184,7 +184,25 @@ class TelegramNotifier:
             try:
                 with self._client() as client:
                     return client.post(url, data=data, files=files)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            except httpx.TimeoutException as exc:
+                if not isinstance(exc, httpx.ConnectTimeout):
+                    # Запрос ушёл, ответа нет. Что произошло на той стороне,
+                    # мы не знаем — и повторять это нельзя.
+                    raise ProviderError(
+                        f"Telegram не ответил на {method} вовремя.",
+                        why=str(exc),
+                        what_to_do="Система разберётся сама на следующем проходе.",
+                        delivered_unknown=True,
+                    ) from exc
+                last = exc
+                log.warning(
+                    "не удалось соединиться с Telegram, повторяю",
+                    extra={"method": method, "attempt": attempt, "of": CONNECT_ATTEMPTS},
+                )
+                if attempt < CONNECT_ATTEMPTS:
+                    self._sleep(CONNECT_PAUSE_SEC)
+                continue
+            except httpx.ConnectError as exc:
                 last = exc
                 log.warning(
                     "не удалось соединиться с Telegram, повторяю",
@@ -202,43 +220,21 @@ class TelegramNotifier:
                 "Если повторяется постоянно, укажи telegram.proxy_env в конфиге "
                 "проекта: из некоторых сетей api.telegram.org недоступен."
             ),
+            # Соединение не состоялось — на той стороне ничего не появилось.
+            delivered_unknown=False,
         ) from last
 
-    def send_for_review(
-        self,
-        *,
-        chat_id: int,
-        project: str,
-        title: str,
-        body: str,
-        warning: str | None,
-        images: list[str],
-        post_id: int,
-    ) -> ReviewMessage:
-        """Картинки альбомом, затем текст с кнопками. Возвращает id текста."""
-        existing = [path for path in images if Path(path).is_file()]
-        if existing:
-            # Подпись — чтобы альбом и текст читались как одно сообщение, а не
-            # как «прилетели картинки, следом непонятный текст».
-            self._send_album(
-                chat_id, existing[:MAX_MEDIA_IN_GROUP], caption=f"[{project}] {title}"
-            )
+    def send_album(self, *, chat_id: int, caption: str, images: list[str]) -> int | None:
+        """Медиагруппа: файлы вложениями, подпись — у первого.
 
-        message = self._call(
-            "sendMessage",
-            data={
-                "chat_id": chat_id,
-                "text": _review_text(project, title, body, warning),
-                "reply_markup": _json(review_keyboard(post_id)),
-                "disable_web_page_preview": True,
-            },
-        )
-        return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
+        Возвращает номер первого сообщения, чтобы текст ушёл ответом на него.
+        """
+        existing = [path for path in images if Path(path).is_file()][:MAX_MEDIA_IN_GROUP]
+        if not existing:
+            return None
 
-    def _send_album(self, chat_id: int, paths: list[str], *, caption: str = "") -> None:
-        """Медиагруппа: файлы вложениями, описание — отдельным полем media."""
         media, files = [], {}
-        for number, path in enumerate(paths):
+        for number, path in enumerate(existing):
             key = f"file{number}"
             item: dict[str, Any] = {"type": "photo", "media": f"attach://{key}"}
             if number == 0 and caption:
@@ -247,9 +243,42 @@ class TelegramNotifier:
             media.append(item)
             files[key] = (Path(path).name, Path(path).read_bytes())
 
-        self._call(
+        sent = self._call(
             "sendMediaGroup", data={"chat_id": chat_id, "media": _json(media)}, files=files
         )
+        # sendMediaGroup отвечает списком сообщений. Разбор защищён: без номера
+        # сообщения текст просто уйдёт не ответом, а отдельно — это хуже, но не
+        # повод терять уже отправленные картинки.
+        if isinstance(sent, list) and sent:
+            return int(sent[0].get("message_id", 0)) or None
+        return None
+
+    def send_review_text(
+        self,
+        *,
+        chat_id: int,
+        project: str,
+        title: str,
+        body: str,
+        warning: str | None,
+        post_id: int,
+        reply_to: int | None = None,
+    ) -> ReviewMessage:
+        data: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": _review_text(project, title, body, warning),
+            "reply_markup": _json(review_keyboard(post_id)),
+            "disable_web_page_preview": True,
+        }
+        if reply_to is not None:
+            # Ответом на альбом: иначе при сбившемся порядке владелец видит
+            # картинки одного поста рядом с текстом другого.
+            data["reply_to_message_id"] = reply_to
+            # Альбом мог быть удалён вручную — сообщение всё равно должно уйти.
+            data["allow_sending_without_reply"] = True
+
+        message = self._call("sendMessage", data=data)
+        return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
 
     def alert(self, *, chat_id: int, text: str) -> None:
         self._call("sendMessage", data={"chat_id": chat_id, "text": _cut(text)})

@@ -166,6 +166,7 @@ def apply(
         conn.execute(
             "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
             "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
+            "review_album_message_id = NULL, "
             "decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
             (target, stamp, by, stamp, post_id),
         )

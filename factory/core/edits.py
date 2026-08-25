@@ -96,7 +96,11 @@ def apply(conn: sqlite3.Connection, post_id: int, edit: Edit) -> bool:
             "UPDATE posts SET title = COALESCE(?, title), body = ?, state = ?, "
             "retry_count = 0, last_error = NULL, next_attempt_at = NULL, "
             "review_message_id = NULL, "
-            + ("review_album_at = review_album_at, " if album else "review_album_at = NULL, ")
+            + (
+                "review_album_at = review_album_at, "
+                if album
+                else "review_album_at = NULL, review_album_message_id = NULL, "
+            )
             + "updated_at = ? WHERE id = ?",
             (edit.title, edit.body, target, stamp, post_id),
         )

@@ -5,8 +5,8 @@
   ],
   "mutations": {
     "повторять и таймаут чтения": [
-      "            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:",
-      "            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:"
+      "                if not isinstance(exc, httpx.ConnectTimeout):",
+      "                if False:"
     ],
     "не повторять сбой соединения вовсе": [
       "        for attempt in range(1, CONNECT_ATTEMPTS + 1):",
@@ -27,6 +27,22 @@
     "подписывать каждую картинку": [
       "            if number == 0 and caption:",
       "            if caption:"
+    ],
+    "не отвечать на альбом": [
+      "            data[\"reply_to_message_id\"] = reply_to",
+      "            pass"
+    ],
+    "терять текст, если альбом удалён": [
+      "            data[\"allow_sending_without_reply\"] = True",
+      "            pass"
+    ],
+    "считать сбой соединения возможной доставкой": [
+      "            delivered_unknown=False,",
+      "            delivered_unknown=True,"
+    ],
+    "считать таймаут чтения гарантированной недоставкой": [
+      "                        delivered_unknown=True,",
+      "                        delivered_unknown=False,"
     ]
   }
 }

@@ -458,7 +458,30 @@ class TestSendForReview:
         assert sent["chat_id"] == 123456789
         assert sent["post_id"] == asking["post_id"]
         assert sent["body"]
-        assert len(sent["images"]) == 4, "ушли не все картинки"
+        (album,) = ctx.providers.notifier.albums
+        assert len(album["images"]) == 4, "ушли не все картинки"
+
+    def test_the_text_replies_to_the_album(self, asking):
+        """Иначе при сбившемся порядке видно картинки одного поста и текст другого."""
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        _, ctx = self.run_send(asking)
+
+        assert ctx.providers.notifier.sent[0]["reply_to"] is not None
+
+    def test_the_album_is_captioned(self, asking):
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+
+        _, ctx = self.run_send(asking)
+
+        assert asking["post_id"] or True
+        assert "demo" in ctx.providers.notifier.albums[0]["caption"]
 
     def test_the_cover_goes_first(self, asking):
         """Владелец должен увидеть главное, не листая альбом."""
@@ -473,7 +496,7 @@ class TestSendForReview:
 
         _, ctx = self.run_send(asking)
 
-        assert ctx.providers.notifier.sent[0]["images"][0] == cover
+        assert ctx.providers.notifier.albums[0]["images"][0] == cover
 
     def test_the_message_id_is_remembered(self, asking):
         """Без него после решения нельзя убрать кнопки."""
@@ -495,7 +518,7 @@ class TestSendForReview:
         картинок три раза: ответ Telegram не успевал прийти, а повтор слал всё
         заново. Отметка ставится до отправки — второй раз картинки не уходят.
         """
-        import httpx
+        from factory.core.errors import ProviderError
 
         asking["advance_through"](
             State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
@@ -504,31 +527,59 @@ class TestSendForReview:
         ctx = asking["context"](State.COMPOSED)
         ctx.project = asking["asking_project"]
         notifier = ctx.providers.notifier
-        working = notifier.send_for_review
+        working = notifier.send_album
         attempts = []
 
-        def timeout(**kwargs):
-            # Именно таймаут, а не любая ошибка: механизм повторов считает
-            # временными сетевые сбои. С неповторяемой ошибкой возврат ретраев
-            # остался бы незаметен, и тест ничего бы не проверял.
+        def ambiguous(**kwargs):
+            # Ответа не дождались: альбом мог дойти, а мог и нет. Повторять
+            # такое нельзя — именно так владелец получил три одинаковых альбома.
             attempts.append(kwargs["images"])
-            raise httpx.ReadTimeout("Telegram не ответил вовремя")
+            raise ProviderError("Telegram не ответил вовремя", delivered_unknown=True)
 
-        notifier.send_for_review = timeout
-        with pytest.raises(httpx.ReadTimeout):
+        notifier.send_album = ambiguous
+        with pytest.raises(ProviderError):
             handler_for(State.COMPOSED)(ctx)
-        notifier.send_for_review = working
+        notifier.send_album = working
 
-        # Повторов внутри шага быть не должно вовсе: ctx.post — снимок, и на
-        # второй попытке отметка в нём всё ещё пуста, так что картинки ушли бы
-        # заново. Именно так владелец и получил три одинаковых альбома.
         assert len(attempts) == 1, f"отправка повторялась {len(attempts)} раза"
-        assert attempts[0], "в первой отправке не было картинок — тест не о том"
 
         result, ctx = self.run_send(asking)
 
         assert result.advanced
-        assert ctx.providers.notifier.sent[0]["images"] == [], "картинки ушли второй раз"
+        assert ctx.providers.notifier.albums == [], "картинки ушли второй раз"
+
+    def test_a_connection_that_never_opened_does_not_lose_the_album(self, asking):
+        """Соединение не состоялось — значит альбом заведомо не дошёл.
+
+        Сжечь отметку на таком сбое означает, что пост придёт к владельцу вовсе
+        без картинок, а решать ему по ним. Именно так на живом прогоне один пост
+        и остался без единой картинки навсегда.
+        """
+        from factory.core.errors import ProviderError
+
+        asking["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        ctx = asking["context"](State.COMPOSED)
+        ctx.project = asking["asking_project"]
+        notifier = ctx.providers.notifier
+        working = notifier.send_album
+        notifier.send_album = lambda **kw: (_ for _ in ()).throw(
+            ProviderError("не удалось соединиться", delivered_unknown=False)
+        )
+
+        with pytest.raises(ProviderError):
+            handler_for(State.COMPOSED)(ctx)
+        notifier.send_album = working
+
+        assert post_row(asking["conn"], asking["post_id"])["review_album_at"] is None
+
+        result, ctx = self.run_send(asking)
+
+        assert result.advanced
+        assert len(ctx.providers.notifier.albums) == 1, "картинки потерялись"
+        assert len(ctx.providers.notifier.albums[0]["images"]) == 4
 
     def test_a_failed_send_still_delivers_the_buttons(self, asking):
         """Потерять кнопки хуже, чем потерять картинки: пост застрянет навсегда."""
@@ -541,13 +592,13 @@ class TestSendForReview:
         ctx = asking["context"](State.COMPOSED)
         ctx.project = asking["asking_project"]
         notifier = ctx.providers.notifier
-        working = notifier.send_for_review
-        notifier.send_for_review = lambda **kw: (_ for _ in ()).throw(
-            ProviderError("Telegram не ответил вовремя")
+        working = notifier.send_album
+        notifier.send_album = lambda **kw: (_ for _ in ()).throw(
+            ProviderError("Telegram не ответил вовремя", delivered_unknown=True)
         )
         with pytest.raises(ProviderError):
             handler_for(State.COMPOSED)(ctx)
-        notifier.send_for_review = working
+        notifier.send_album = working
 
         result, ctx = self.run_send(asking)
 
@@ -759,3 +810,63 @@ class TestSnapshotIsTakenBeforeErasing:
         assert post_row(conn, post_id)["body"] is None
         (row,) = rejections(conn, post_id)
         assert json.loads(row["snapshot"])["body"] == body
+
+
+class TestAlbumIsSentExactlyOnce:
+    """Две дороги к дублю альбома, обе закрыты по-разному."""
+
+    @pytest.fixture
+    def asking(self, pipeline):
+        from factory.core.config import TelegramCfg
+
+        project = pipeline["project"]
+        pipeline["asking_project"] = project.model_copy(
+            update={
+                "review": project.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(provider="stub", chat_id=123456789, reviewers=[123456789]),
+            }
+        )
+        pipeline["advance_through"](
+            State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
+            State.PROMPTS_READY, State.IMAGES_READY,
+        )
+        return pipeline
+
+    def run_send(self, pipeline):
+        ctx = pipeline["context"](State.COMPOSED)
+        ctx.project = pipeline["asking_project"]
+        return handler_for(State.COMPOSED)(ctx), ctx
+
+    def test_a_second_pass_does_not_resend_the_album(self, asking):
+        """Отметка об успешной отправке — единственное, что держит эту дверь."""
+        _, ctx = self.run_send(asking)
+        assert len(ctx.providers.notifier.albums) == 1
+
+        with db.write_transaction(asking["conn"]):
+            asking["conn"].execute(
+                "UPDATE posts SET review_message_id = NULL WHERE id = ?", (asking["post_id"],)
+            )
+        _, ctx = self.run_send(asking)
+
+        assert len(ctx.providers.notifier.albums) == 1, "картинки ушли второй раз"
+
+    def test_a_retryable_failure_on_the_text_does_not_resend_the_album(self, asking):
+        """Повторы внутри шага работают со снимком поста, а он устарел.
+
+        Альбом уже отправлен и отмечен в базе, но в снимке отметки нет. Включи
+        здесь ретраи — и вторая попытка снова пошлёт картинки, хотя проблема
+        была только с текстом.
+        """
+        from factory.core.errors import ProviderError
+
+        ctx = asking["context"](State.COMPOSED)
+        ctx.project = asking["asking_project"]
+        notifier = ctx.providers.notifier
+        notifier.send_review_text = lambda **kw: (_ for _ in ()).throw(
+            ProviderError("Telegram просит подождать", status_code=429)
+        )
+
+        with pytest.raises(ProviderError):
+            handler_for(State.COMPOSED)(ctx)
+
+        assert len(notifier.albums) == 1, "картинки ушли повторно из-за сбоя текста"

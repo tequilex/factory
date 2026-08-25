@@ -21,10 +21,18 @@ class StubNotifier:
 
     name: str = "stub"
     sent: list[dict] = field(default_factory=list)
+    albums: list[dict] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
     _next_message_id: int = 1000
 
-    def send_for_review(
+    def send_album(self, *, chat_id: int, caption: str, images: list[str]) -> int | None:
+        if not images:
+            return None
+        self._next_message_id += 1
+        self.albums.append({"chat_id": chat_id, "caption": caption, "images": list(images)})
+        return self._next_message_id
+
+    def send_review_text(
         self,
         *,
         chat_id: int,
@@ -32,8 +40,8 @@ class StubNotifier:
         title: str,
         body: str,
         warning: str | None,
-        images: list[str],
         post_id: int,
+        reply_to: int | None = None,
     ) -> ReviewMessage:
         self._next_message_id += 1
         self.sent.append(
@@ -43,8 +51,8 @@ class StubNotifier:
                 "title": title,
                 "body": body,
                 "warning": warning,
-                "images": list(images),
                 "post_id": post_id,
+                "reply_to": reply_to,
             }
         )
         log.info("ревью-сообщение не отправлено: заглушка", extra={"post_id": post_id})

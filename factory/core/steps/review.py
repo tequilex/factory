@@ -74,6 +74,51 @@ def _image_paths(ctx: StepContext) -> list[str]:
     return [row["local_path"] for row in rows]
 
 
+def _mark_album(ctx: StepContext, message_id: int | None) -> None:
+    """Запомнить, что картинки уже отправляли. Своей транзакцией."""
+    with db.write_transaction(ctx.conn):
+        ctx.conn.execute(
+            "UPDATE posts SET review_album_at = ?, review_album_message_id = ? WHERE id = ?",
+            (to_iso(now_utc()), message_id, ctx.post.id),
+        )
+
+
+def _send_album(ctx: StepContext, chat_id: int) -> int | None:
+    """Отправить картинки не больше одного раза, но и не потерять их зря.
+
+    Отметка ставится по итогу, а не заранее, и решает его одна вещь: мог ли
+    альбом дойти. Соединение не установилось — не мог, отметку ставить нельзя,
+    иначе пост придёт к владельцу вовсе без картинок, а решать ему по ним.
+    Ответа не дождались — мог, и повтор прислал бы второй альбом.
+    """
+    images = _image_paths(ctx)
+    if not images:
+        _mark_album(ctx, None)
+        return None
+
+    try:
+        album_id = ctx.providers.notifier.send_album(
+            chat_id=chat_id,
+            caption=f"[{ctx.project.slug}] {ctx.post.title or ''}",
+            images=images,
+        )
+    except Exception as exc:  # noqa: BLE001 — разбираем и пробрасываем дальше
+        if getattr(exc, "delivered_unknown", True):
+            _mark_album(ctx, None)
+            ctx.log.warning(
+                "судьба альбома неизвестна, второй раз не отправляем",
+                extra={"post_id": ctx.post.id},
+            )
+        else:
+            ctx.log.info(
+                "альбом не ушёл, попробуем целиком позже", extra={"post_id": ctx.post.id}
+            )
+        raise
+
+    _mark_album(ctx, album_id)
+    return album_id
+
+
 @tracked_call(State.COMPOSED, attempts=1)
 def send_for_review(ctx: StepContext) -> StepResult:
     reason = _skips_review(ctx)
@@ -89,31 +134,19 @@ def send_for_review(ctx: StepContext) -> StepResult:
         return advanced(State.IN_REVIEW)
 
     telegram = ctx.project.telegram
-    images: list[str] = []
+    album_id = ctx.post.review_album_message_id
 
     if ctx.post.review_album_at is None:
-        images = _image_paths(ctx)
-        # Отметка ставится ДО отправки. Обратный порядок и дал три одинаковых
-        # альбома: ответ не успевал прийти, а повтор слал картинки заново.
-        with db.write_transaction(ctx.conn):
-            ctx.conn.execute(
-                "UPDATE posts SET review_album_at = ? WHERE id = ?",
-                (to_iso(now_utc()), ctx.post.id),
-            )
-    else:
-        ctx.log.warning(
-            "картинки уже отправляли, повтор пропущен",
-            extra={"post_id": ctx.post.id},
-        )
+        album_id = _send_album(ctx, telegram.chat_id)
 
-    message = ctx.providers.notifier.send_for_review(
+    message = ctx.providers.notifier.send_review_text(
         chat_id=telegram.chat_id,
         project=ctx.project.slug,
         title=ctx.post.title or "",
         body=ctx.post.body or "",
         warning=_warning(ctx),
-        images=images,
         post_id=ctx.post.id,
+        reply_to=album_id,
     )
 
     with db.write_transaction(ctx.conn):

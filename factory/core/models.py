@@ -177,6 +177,7 @@ class Post(_Row):
     publish_guid: str | None = None
     review_chat_id: int | None = None
     review_album_at: datetime | None = None
+    review_album_message_id: int | None = None
     review_message_id: int | None = None
     decided_at: datetime | None = None
     decided_by: int | None = None

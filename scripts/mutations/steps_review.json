@@ -53,17 +53,29 @@
       "@tracked_call(State.COMPOSED, attempts=1)",
       "@tracked_call(State.COMPOSED)"
     ],
-    "не проверять отметку об альбоме": [
-      "    if ctx.post.review_album_at is None:",
-      "    if True:"
-    ],
-    "не отмечать отправку альбома заранее": [
-      "        with db.write_transaction(ctx.conn):\n            ctx.conn.execute(\n                \"UPDATE posts SET review_album_at = ? WHERE id = ?\",\n                (to_iso(now_utc()), ctx.post.id),\n            )",
-      "        pass"
-    ],
     "забирать пост из-под живых кнопок": [
       "    if ctx.post.review_message_id:\n        # Пост уже лежит у владельца",
       "    if False:\n        # Пост уже лежит у владельца"
+    ],
+    "жечь отметку, когда альбом заведомо не ушёл": [
+      "        if getattr(exc, \"delivered_unknown\", True):",
+      "        if True:"
+    ],
+    "слать альбом заново, когда он мог дойти": [
+      "        if getattr(exc, \"delivered_unknown\", True):",
+      "        if False:"
+    ],
+    "не проверять, отправляли ли альбом": [
+      "    if ctx.post.review_album_at is None:",
+      "    if True:"
+    ],
+    "не отмечать отправленный альбом": [
+      "    _mark_album(ctx, album_id)\n    return album_id",
+      "    return album_id"
+    ],
+    "терять связь текста с альбомом": [
+      "        reply_to=album_id,",
+      "        reply_to=None,"
     ]
   }
 }

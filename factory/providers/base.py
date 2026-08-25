@@ -91,10 +91,21 @@ class Notifier(Protocol):
     владельца, а телефон при этом молчал.
     """
 
-    def send_for_review(
+    def send_album(self, *, chat_id: int, caption: str, images: list[str]) -> int | None:
+        """Отправить картинки. Возвращает номер сообщения для ответа на него."""
+        ...
+
+    def send_review_text(
         self, *, chat_id: int, project: str, title: str, body: str,
-        warning: str | None, images: list[str], post_id: int,
-    ) -> ReviewMessage: ...
+        warning: str | None, post_id: int, reply_to: int | None = None,
+    ) -> ReviewMessage:
+        """Текст с кнопками, ответом на альбом.
+
+        Ответ, а не отдельное сообщение: при сбоях порядок отправки сбивается,
+        и владелец видит альбом одного поста рядом с текстом другого. Связь
+        показывает Telegram, а не память человека.
+        """
+        ...
 
     def alert(self, *, chat_id: int, text: str) -> None: ...
 

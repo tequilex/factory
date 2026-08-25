@@ -510,6 +510,7 @@ def post_retry(post_id: int) -> None:
             # переживает поломку.
             "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
             "next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, "
+            "review_album_message_id = NULL, "
             "updated_at = ? WHERE id = ?",
             (target, to_iso(now_utc()), post_id),
         )

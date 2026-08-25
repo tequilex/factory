@@ -50,6 +50,10 @@ class ProviderError(FactoryError):
       provider that swallows the code into a message turns a transient blip into
       a burnt attempt;
     * ``retry_after`` — seconds the server asked us to wait;
+    * ``delivered_unknown`` — whether the request may have arrived despite the
+      failure. A connection that was never established proves nothing arrived,
+      and the caller may safely try again. A read timeout proves nothing at all:
+      the request went out, and a repeat may duplicate whatever it did;
     * ``cost`` — money already spent on a call that then failed. The model
       charges for a reply that does not parse just as it charges for one that
       does; leaving this out makes the spend report understate exactly when the
@@ -65,10 +69,12 @@ class ProviderError(FactoryError):
         status_code: int | None = None,
         retry_after: float | None = None,
         cost: float | None = None,
+        delivered_unknown: bool = False,
     ) -> None:
         self.status_code = status_code
         self.retry_after = retry_after
         self.cost = cost
+        self.delivered_unknown = delivered_unknown
         super().__init__(what, why=why, what_to_do=what_to_do)
 
 
