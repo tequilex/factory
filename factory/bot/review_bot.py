@@ -27,7 +27,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from factory.core import alerts, db, edits, secrets
+from factory.core import alerts, db, edits, paths, secrets
 from factory.core.config import ProjectConfig, load_project, resolve_secret
 from factory.core.decisions import LABEL, Decision, apply
 from factory.core.errors import ConfigError, FactoryError
@@ -297,6 +297,11 @@ def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug
             "в ВК истёк.\n\nПришлите мне новый — пост уедет сам, повторно "
             "нажимать не нужно." + tail
         )
+
+    if paths.ignore_schedule():
+        # Владелец включил режим «публиковать в любое время». Обещать слот
+        # значит назвать час, до которого никто ждать не будет.
+        return "✅ Уходит в группу ближайшим тиком: расписание отключено."
 
     when = next_slot_start(project, now_utc())
     if when is None:

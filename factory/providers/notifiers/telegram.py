@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,13 @@ MAX_MESSAGE_LENGTH = 4096
 # сообщением: 1400 символов сюда не помещаются.
 MAX_CAPTION_LENGTH = 1024
 MAX_MEDIA_IN_GROUP = 10
+
+# Сколько раз пробовать, если не удалось даже установить соединение. Такой сбой
+# отличается от прочих тем, что запрос заведомо не ушёл: повторить его безопасно,
+# дубля не будет. Сеть до api.telegram.org отвечает неровно, и без этого каждая
+# третья отправка откладывалась на десять минут.
+CONNECT_ATTEMPTS = 3
+CONNECT_PAUSE_SEC = 2.0
 
 # Клавиатура ревью. Порядок и разбивка по строкам — как в SPEC.md.
 KEYBOARD_ROWS: tuple[tuple[Decision, ...], ...] = (
@@ -116,10 +124,16 @@ class TelegramNotifier:
     name = "telegram"
 
     def __init__(
-        self, *, token: str, token_env: str = "TELEGRAM_BOT_TOKEN", proxy_env: str | None = None
+        self,
+        *,
+        token: str,
+        token_env: str = "TELEGRAM_BOT_TOKEN",
+        proxy_env: str | None = None,
+        sleep=time.sleep,
     ) -> None:
         self.token = token
         self.token_env = token_env
+        self._sleep = sleep
         self.proxy_env = proxy_env
         self.calls = 0
 
@@ -129,10 +143,7 @@ class TelegramNotifier:
     def _call(self, method: str, *, data: dict, files: dict | None = None) -> Any:
         """Один вызов Bot API. Ошибку превращает в понятную человеку."""
         self.calls += 1
-        with self._client() as client:
-            response = client.post(
-                f"{API_BASE}/bot{self.token}/{method}", data=data, files=files
-            )
+        response = self._send(method, data=data, files=files)
 
         try:
             payload = response.json()
@@ -156,6 +167,42 @@ class TelegramNotifier:
             )
 
         return payload.get("result")
+
+    def _send(self, method: str, *, data: dict, files: dict | None) -> httpx.Response:
+        """Запрос с повтором только на сбоях установки соединения.
+
+        Повторяются исключительно ``ConnectError`` и ``ConnectTimeout``: при них
+        соединение не состоялось, значит на той стороне ничего не появилось.
+        Таймаут чтения не повторяется никогда — там запрос уже ушёл, и повтор
+        прислал бы владельцу второй альбом. Ровно так он однажды и получил один
+        и тот же пост трижды.
+        """
+        url = f"{API_BASE}/bot{self.token}/{method}"
+        last: Exception | None = None
+
+        for attempt in range(1, CONNECT_ATTEMPTS + 1):
+            try:
+                with self._client() as client:
+                    return client.post(url, data=data, files=files)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last = exc
+                log.warning(
+                    "не удалось соединиться с Telegram, повторяю",
+                    extra={"method": method, "attempt": attempt, "of": CONNECT_ATTEMPTS},
+                )
+                if attempt < CONNECT_ATTEMPTS:
+                    self._sleep(CONNECT_PAUSE_SEC)
+
+        assert last is not None
+        raise ProviderError(
+            "Не удалось соединиться с Telegram.",
+            why=f"{CONNECT_ATTEMPTS} попытки подряд: {last}",
+            what_to_do=(
+                "Обычно это временный сбой сети — система повторит позже. "
+                "Если повторяется постоянно, укажи telegram.proxy_env в конфиге "
+                "проекта: из некоторых сетей api.telegram.org недоступен."
+            ),
+        ) from last
 
     def send_for_review(
         self,

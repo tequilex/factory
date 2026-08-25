@@ -110,6 +110,30 @@ class TestSendForReview:
         assert len(media) == len(images)
         assert [item["media"] for item in media] == [f"attach://file{n}" for n in range(3)]
 
+    def test_the_album_is_captioned_with_the_project_and_title(self, monkeypatch, images):
+        """Без подписи два сообщения читаются как «картинки, потом непонятный текст»."""
+        recorder = Recorder()
+
+        notifier(recorder, monkeypatch).send_for_review(
+            chat_id=123456789, project="vk_demo", title="Как выбрать шины",
+            body="Тело", warning=None, images=images, post_id=7,
+        )
+
+        media = json.loads(recorder.form("sendMediaGroup")["media"])
+        assert media[0]["caption"] == "[vk_demo] Как выбрать шины"
+
+    def test_only_the_first_photo_carries_the_caption(self, monkeypatch, images):
+        """Telegram показывает подпись у первого вложения; на остальных это мусор."""
+        recorder = Recorder()
+
+        notifier(recorder, monkeypatch).send_for_review(
+            chat_id=123456789, project="vk_demo", title="Заголовок",
+            body="Тело", warning=None, images=images, post_id=7,
+        )
+
+        media = json.loads(recorder.form("sendMediaGroup")["media"])
+        assert all("caption" not in item for item in media[1:])
+
     def test_the_buttons_ride_with_the_text(self, monkeypatch, images):
         """Telegram не разрешает кнопки на медиагруппе — только на сообщении."""
         recorder = Recorder()
@@ -293,3 +317,87 @@ class TestKeyboard:
     def test_foreign_or_broken_data_is_refused(self, data):
         """Чужая кнопка не должна применяться наугад."""
         assert parse_callback(data) is None
+
+
+class TestConnectFailuresAreRetried:
+    """Сбой установки соединения — единственный, который можно повторять.
+
+    Соединение не состоялось, значит на той стороне ничего не появилось.
+    Таймаут чтения так повторять нельзя: запрос уже ушёл, и владелец получит
+    второй альбом — именно так он однажды и получил один пост трижды.
+    """
+
+    def notifier_with(self, monkeypatch, handler):
+        transport = httpx.MockTransport(handler)
+        monkeypatch.setattr(
+            "factory.core.http.client_for",
+            lambda *a, **kw: httpx.Client(transport=transport, headers=kw.get("headers") or {}),
+        )
+        return TelegramNotifier(token=TOKEN, sleep=lambda _: None)
+
+    def test_a_handshake_timeout_is_retried(self, monkeypatch):
+        attempts = {"n": 0}
+
+        def flaky(request):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise httpx.ConnectTimeout("handshake timed out")
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+        self.notifier_with(monkeypatch, flaky).alert(chat_id=123456789, text="привет")
+
+        assert attempts["n"] == 3
+
+    def test_a_refused_connection_is_retried(self, monkeypatch):
+        attempts = {"n": 0}
+
+        def flaky(request):
+            attempts["n"] += 1
+            if attempts["n"] < 2:
+                raise httpx.ConnectError("connection refused")
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+        self.notifier_with(monkeypatch, flaky).alert(chat_id=123456789, text="привет")
+
+        assert attempts["n"] == 2
+
+    def test_a_read_timeout_is_never_retried(self, monkeypatch):
+        """Запрос уже ушёл: повтор прислал бы владельцу второй альбом."""
+        attempts = {"n": 0}
+
+        def hangs(request):
+            attempts["n"] += 1
+            raise httpx.ReadTimeout("не дождались ответа")
+
+        with pytest.raises(httpx.ReadTimeout):
+            self.notifier_with(monkeypatch, hangs).alert(chat_id=123456789, text="привет")
+
+        assert attempts["n"] == 1, "повторили запрос, который мог дойти"
+
+    def test_giving_up_explains_the_proxy(self, monkeypatch):
+        def dead(request):
+            raise httpx.ConnectTimeout("сеть недоступна")
+
+        with pytest.raises(ProviderError) as excinfo:
+            self.notifier_with(monkeypatch, dead).alert(chat_id=123456789, text="привет")
+
+        message = str(excinfo.value)
+        assert "telegram.proxy_env" in message
+
+    def test_the_album_is_not_sent_twice_on_a_connect_retry(self, monkeypatch, images):
+        """Повтор соединения не должен превращаться в два альбома."""
+        seen = []
+
+        def flaky(request):
+            seen.append(request.url.path.rsplit("/", 1)[-1])
+            if len(seen) == 1:
+                raise httpx.ConnectTimeout("handshake timed out")
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+        self.notifier_with(monkeypatch, flaky).send_for_review(
+            chat_id=123456789, project="vk_demo", title="Заголовок", body="Тело",
+            warning=None, images=images, post_id=7,
+        )
+
+        assert seen.count("sendMediaGroup") == 2, "первый заход не состоялся, второй — доставка"
+        assert seen.count("sendMessage") == 1

@@ -369,3 +369,23 @@ class TestNextSlot:
         project = base.model_copy(update={"vk": base.vk.model_copy(update={"schedule": []})})
 
         assert next_slot_start(project, now_utc()) is None
+
+
+class TestApprovalRespectsTheScheduleSwitch:
+    def test_with_the_schedule_off_no_slot_is_promised(self, bot_env, monkeypatch):
+        """Иначе бот называет час, до которого никто ждать не собирается."""
+        from factory.core.config import TelegramCfg
+
+        monkeypatch.setenv("FACTORY_IGNORE_SCHEDULE", "1")
+        base = bot_env["project"]
+        project = base.model_copy(
+            update={
+                "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER]),
+                "vk": base.vk.model_copy(update={"schedule": ["19:30"], "app_id": 1}),
+            }
+        )
+
+        text = review_bot._approval_text(bot_env["conn"], project, "demo")
+
+        assert "расписание отключено" in text
+        assert "19:30" not in text

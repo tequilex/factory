@@ -1,0 +1,32 @@
+{
+  "module": "factory/providers/notifiers/telegram.py",
+  "tests": [
+    "tests/test_notifier_telegram.py"
+  ],
+  "mutations": {
+    "повторять и таймаут чтения": [
+      "            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:",
+      "            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:"
+    ],
+    "не повторять сбой соединения вовсе": [
+      "        for attempt in range(1, CONNECT_ATTEMPTS + 1):",
+      "        for attempt in range(1, 2):"
+    ],
+    "молча возвращать пустоту после отказов": [
+      "        assert last is not None\n        raise ProviderError(",
+      "        return httpx.Response(200, json={})\n        raise ProviderError("
+    ],
+    "не подсказывать прокси": [
+      "                \"Если повторяется постоянно, укажи telegram.proxy_env в конфиге \"",
+      "                \"Если повторяется постоянно, обратись к администратору. \""
+    ],
+    "терять подпись альбома": [
+      "                item[\"caption\"] = caption[:MAX_CAPTION_LENGTH]",
+      "                pass"
+    ],
+    "подписывать каждую картинку": [
+      "            if number == 0 and caption:",
+      "            if caption:"
+    ]
+  }
+}
