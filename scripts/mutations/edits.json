@@ -1,0 +1,48 @@
+{
+  "module": "factory/core/edits.py",
+  "tests": ["tests/test_edits.py"],
+  "mutations": {
+    "считать заголовком любой первый абзац": [
+      "    if separator and tail and \"\\n\" not in head and len(head) <= TITLE_MAX_LENGTH:",
+      "    if separator and tail:"
+    ],
+    "никогда не принимать заголовок": [
+      "    if separator and tail and \"\\n\" not in head and len(head) <= TITLE_MAX_LENGTH:",
+      "    if False:"
+    ],
+    "принять заголовок длиннее обложки": [
+      "len(head) <= TITLE_MAX_LENGTH:", "len(head) <= TITLE_MAX_LENGTH * 10:"
+    ],
+    "не пересобирать обложку при смене заголовка": [
+      "            conn.execute(\n                \"UPDATE assets SET external_ref = NULL WHERE post_id = ? AND kind = 'cover'\",\n                (post_id,),\n            )\n            target, album = State.IMAGES_READY, None",
+      "            target, album = State.IMAGES_READY, None"
+    ],
+    "не возвращать пост на пересборку обложки": [
+      "            target, album = State.IMAGES_READY, None",
+      "            target, album = State.COMPOSED, \"keep\""
+    ],
+    "слать альбом заново при правке одного текста": [
+      "            target, album = State.COMPOSED, \"keep\"",
+      "            target, album = State.COMPOSED, None"
+    ],
+    "оставить активным старое сообщение с кнопками": [
+      "            \"review_message_id = NULL, \"",
+      "            \"review_message_id = review_message_id, \""
+    ],
+    "затирать заголовок пустым значением": [
+      "            \"UPDATE posts SET title = COALESCE(?, title), body = ?, state = ?, \"",
+      "            \"UPDATE posts SET title = ?, body = ?, state = ?, \""
+    ],
+    "править пост, уже уехавший из ревью": [
+      "            \"SELECT id FROM posts WHERE id = ? AND state = ?\", (post_id, State.IN_REVIEW)",
+      "            \"SELECT id FROM posts WHERE id = ? AND ? IS NOT NULL\", (post_id, State.IN_REVIEW)"
+    ],
+    "искать пост без учёта состояния": [
+      "        \"SELECT id FROM posts WHERE review_message_id = ? AND state = ?\",\n        (message_id, State.IN_REVIEW),",
+      "        \"SELECT id FROM posts WHERE review_message_id = ? AND ? IS NOT NULL\",\n        (message_id, State.IN_REVIEW),"
+    ],
+    "принимать пустую правку": [
+      "    if not cleaned:\n        return None", "    if False:\n        return None"
+    ]
+  }
+}

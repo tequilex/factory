@@ -230,3 +230,21 @@ def run(ctx: StepContext) -> StepResult:
         extra={"post_id": ctx.post.id, "external_id": external_id},
     )
     return advanced(State.PUBLISHED)
+
+
+def next_slot_start(project: ProjectConfig, moment: datetime) -> datetime | None:
+    """Ближайший момент, когда пост сможет выйти. ``None`` — расписания нет.
+
+    Нужно боту: «уйдёт в ближайший слот» без времени владелец прочитать не может,
+    а пауза до вечера выглядит как поломка.
+    """
+    if not project.vk.slots:
+        return None
+
+    local = moment.astimezone(project.vk.tz)
+    starts = [
+        _slot_start(local, slot, offset)
+        for slot in project.vk.slots
+        for offset in (0, 1)
+    ]
+    return min((start for start in starts if start > local), default=None)

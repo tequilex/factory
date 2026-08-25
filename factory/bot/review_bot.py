@@ -21,16 +21,19 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
+from factory.core.clock import now_utc
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from factory.core import alerts, db, secrets
+from factory.core import alerts, db, edits, secrets
 from factory.core.config import ProjectConfig, load_project, resolve_secret
 from factory.core.decisions import LABEL, Decision, apply
 from factory.core.errors import ConfigError, FactoryError
 from factory.core.logging import get_logger
 from factory.core.models import State
+from factory.core.steps.publish import next_slot_start
 from factory.providers.notifiers.telegram import ICON, extract_vk_token, parse_callback
 
 log = get_logger(__name__)
@@ -41,6 +44,8 @@ START_TEXT = (
     "Нажатие сразу применяется — пост уходит в группу или возвращается на "
     "доработку.\n\n"
     "Команда /status покажет, что происходит прямо сейчас.\n\n"
+    "Текст можно поправить руками: ответьте на сообщение с постом своим "
+    "вариантом, и он его заменит.\n\n"
     "Когда истечёт ключ загрузки картинок в ВК (это бывает раз в сутки), "
     "я пришлю ссылку — надо будет открыть её и переслать мне адрес из строки "
     "браузера."
@@ -113,6 +118,11 @@ def build_dispatcher(
     async def on_status(message: Message) -> None:
         await message.answer(_status_text(conn, current(), message.from_user.id))
 
+    @dispatcher.message(F.reply_to_message)
+    async def on_edit(message: Message) -> None:
+        """Ответ на сообщение поста — это исправленный текст."""
+        await _accept_edit(conn, current(), message)
+
     @dispatcher.message(F.text.contains("access_token="))
     async def on_vk_token(message: Message) -> None:
         """Владелец прислал адрес после входа в ВК — вынуть ключ и сохранить.
@@ -149,7 +159,7 @@ def build_dispatcher(
 
         await query.answer(f"{ICON[decision]} {LABEL[decision]}")
         await _drop_keyboard(query)
-        await _confirm(query, decision)
+        await _confirm(query, decision, conn, current().get(slug or ""), slug)
 
     @dispatcher.errors()
     async def on_error(event, exception: Exception) -> bool:
@@ -213,6 +223,45 @@ async def _accept_vk_token(
     )
 
 
+async def _accept_edit(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
+) -> None:
+    post_id = edits.find_post_under(conn, message.reply_to_message.message_id)
+    if post_id is None:
+        await message.answer(
+            "Не понял, к какому посту это относится. Ответьте на сообщение с "
+            "постом — тем, под которым кнопки."
+        )
+        return
+
+    slug = _project_of_post(conn, post_id)
+    if not _may_press(projects, slug, message.from_user.id):
+        await message.answer(NOT_YOURS)
+        return
+
+    edit = edits.parse(message.text or "")
+    if edit is None:
+        await message.answer("Пустое сообщение — править нечего.")
+        return
+
+    if not edits.apply(conn, post_id, edit):
+        await message.answer(ALREADY_DONE)
+        return
+
+    if edit.cover_changes:
+        await message.answer(
+            f"Принял. Заголовок: «{edit.title}».\n\n"
+            "Он печатается на обложке, поэтому обложку соберу заново — пост "
+            "вернётся с новыми картинками через минуту."
+        )
+    else:
+        await message.answer(
+            f"Принял, {len(edit.body)} символов. Заголовок оставил прежним.\n\n"
+            "Пост вернётся с кнопками через минуту. Чтобы поменять и заголовок, "
+            "пришлите его первой строкой, потом пустую строку, потом текст."
+        )
+
+
 async def _forget(message: Message) -> None:
     """Удалить сообщение владельца с ключом. В личке боту это разрешено."""
     try:
@@ -229,9 +278,41 @@ async def _drop_keyboard(query: CallbackQuery) -> None:
         log.info("не удалось убрать кнопки", extra={"reason": str(exc)})
 
 
-async def _confirm(query: CallbackQuery, decision: Decision) -> None:
+def _approval_text(conn: sqlite3.Connection, project: ProjectConfig | None, slug: str | None) -> str:
+    """Что ответить на «Опубликовать».
+
+    Обещать публикацию, когда ключ ВК истёк, нельзя: владелец нажимает, видит
+    бодрое «уходит» и тишину, а тревога о ключе уже висит и второй раз не
+    придёт. Про время тоже честно: «в ближайший слот» без часа читается как
+    «сейчас», и пауза до вечера выглядит поломкой.
+    """
+    if project is None or slug is None:
+        return "✅ Пост одобрен."
+
+    if alerts.is_raised(conn, "vk_token", slug):
+        link = alerts.vk_token_url(project.vk.app_id)
+        tail = f"\n\n{link}" if link else "\n\nКак получить ключ — RUNBOOK.md."
+        return (
+            "✅ Пост одобрен, но выйти сейчас не может: ключ загрузки картинок "
+            "в ВК истёк.\n\nПришлите мне новый — пост уедет сам, повторно "
+            "нажимать не нужно." + tail
+        )
+
+    when = next_slot_start(project, now_utc())
+    if when is None:
+        return "✅ Уходит в группу ближайшим тиком: расписание не задано."
+    return f"✅ Уходит в группу {when:%d.%m в %H:%M} — это ближайший слот расписания."
+
+
+async def _confirm(
+    query: CallbackQuery,
+    decision: Decision,
+    conn: sqlite3.Connection,
+    project: ProjectConfig | None = None,
+    slug: str | None = None,
+) -> None:
     text = {
-        Decision.APPROVE: "✅ Уходит в группу в ближайший слот расписания.",
+        Decision.APPROVE: _approval_text(conn, project, slug),
         Decision.IMAGES: "🔄 Картинки будут перерисованы, текст сохранён.",
         Decision.SCENES: "🎲 Сцены придумаются заново, текст сохранён.",
         Decision.TEXT: "✏️ Текст будет написан заново, тема остаётся.",

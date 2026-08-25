@@ -1,6 +1,6 @@
 {
   "module": "factory/core/steps/publish.py",
-  "tests": "tests/test_transitions.py tests/test_publish_limit.py",
+  "tests": "tests/test_transitions.py tests/test_publish_limit.py tests/test_review_bot.py",
   "mutations": {
     "убрать проверку external_id — допустить дубль публикации": [
       "    if ctx.post.external_id:",
@@ -69,6 +69,14 @@
     "поставить обложку последней во вложениях": [
       "        \"SELECT * FROM assets WHERE post_id = ? ORDER BY position\", (post_id,)",
       "        \"SELECT * FROM assets WHERE post_id = ? ORDER BY kind DESC, position\", (post_id,)"
+    ],
+    "показывать уже прошедший слот": [
+      "    return min((start for start in starts if start > local), default=None)",
+      "    return min(starts, default=None)"
+    ],
+    "не переходить на завтрашний слот": [
+      "        for offset in (0, 1)",
+      "        for offset in (0,)"
     ]
   }
 }

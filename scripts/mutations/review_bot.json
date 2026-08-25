@@ -1,6 +1,9 @@
 {
   "module": "factory/bot/review_bot.py",
-  "tests": ["tests/test_review_bot.py"],
+  "tests": [
+    "tests/test_edits.py",
+    "tests/test_review_bot.py"
+  ],
   "mutations": {
     "пускать кого угодно к кнопкам": [
       "    return user_id in project.telegram.reviewers",
@@ -27,11 +30,11 @@
       "        if not apply(conn, post_id, decision, by=None):"
     ],
     "оставить кнопки после решения": [
-      "        await _drop_keyboard(query)\n        await _confirm(query, decision)",
-      "        await _confirm(query, decision)"
+      "        await _drop_keyboard(query)\n        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)",
+      "        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)"
     ],
     "не объяснять, что будет дальше": [
-      "        await _confirm(query, decision)",
+      "        await _confirm(query, decision, conn, current().get(slug or \"\"), slug)",
       "        pass"
     ],
     "ронять решение из-за неубранных кнопок": [
@@ -49,6 +52,26 @@
     "считать ждущими постами что попало": [
       "            \"SUM(state = ?) AS waiting, \"",
       "            \"SUM(state != ?) AS waiting, \""
+    ],
+    "обещать публикацию при истёкшем ключе": [
+      "    if alerts.is_raised(conn, \"vk_token\", slug):",
+      "    if False:"
+    ],
+    "не давать ссылку при истёкшем ключе": [
+      "        link = alerts.vk_token_url(project.vk.app_id)",
+      "        link = None"
+    ],
+    "не называть время публикации": [
+      "return f\"✅ Уходит в группу {when:%d.%m в %H:%M} — это ближайший слот расписания.\"",
+      "return \"✅ Уходит в группу в ближайший слот расписания.\""
+    ],
+    "править пост без проверки прав": [
+      "    if not _may_press(projects, slug, message.from_user.id):\n        await message.answer(NOT_YOURS)\n        return\n\n    edit = edits.parse",
+      "    edit = edits.parse"
+    ],
+    "молчать про непонятный ответ": [
+      "    if post_id is None:\n        await message.answer(\n            \"Не понял, к какому посту это относится. Ответьте на сообщение с \"\n            \"постом — тем, под которым кнопки.\"\n        )\n        return",
+      "    if post_id is None:\n        return"
     ]
   }
 }

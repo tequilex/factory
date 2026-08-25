@@ -34,6 +34,9 @@ API_BASE = "https://api.telegram.org"
 
 # Лимиты Telegram. Числа их, не наши: менять нельзя, можно только уложиться.
 MAX_MESSAGE_LENGTH = 4096
+# Подпись под медиагруппой. Именно из-за неё текст поста едет отдельным
+# сообщением: 1400 символов сюда не помещаются.
+MAX_CAPTION_LENGTH = 1024
 MAX_MEDIA_IN_GROUP = 10
 
 # Клавиатура ревью. Порядок и разбивка по строкам — как в SPEC.md.
@@ -168,7 +171,11 @@ class TelegramNotifier:
         """Картинки альбомом, затем текст с кнопками. Возвращает id текста."""
         existing = [path for path in images if Path(path).is_file()]
         if existing:
-            self._send_album(chat_id, existing[:MAX_MEDIA_IN_GROUP])
+            # Подпись — чтобы альбом и текст читались как одно сообщение, а не
+            # как «прилетели картинки, следом непонятный текст».
+            self._send_album(
+                chat_id, existing[:MAX_MEDIA_IN_GROUP], caption=f"[{project}] {title}"
+            )
 
         message = self._call(
             "sendMessage",
@@ -181,12 +188,16 @@ class TelegramNotifier:
         )
         return ReviewMessage(chat_id=chat_id, message_id=int(message["message_id"]))
 
-    def _send_album(self, chat_id: int, paths: list[str]) -> None:
+    def _send_album(self, chat_id: int, paths: list[str], *, caption: str = "") -> None:
         """Медиагруппа: файлы вложениями, описание — отдельным полем media."""
         media, files = [], {}
         for number, path in enumerate(paths):
             key = f"file{number}"
-            media.append({"type": "photo", "media": f"attach://{key}"})
+            item: dict[str, Any] = {"type": "photo", "media": f"attach://{key}"}
+            if number == 0 and caption:
+                # Telegram показывает подпись только у первого вложения.
+                item["caption"] = caption[:MAX_CAPTION_LENGTH]
+            media.append(item)
             files[key] = (Path(path).name, Path(path).read_bytes())
 
         self._call(

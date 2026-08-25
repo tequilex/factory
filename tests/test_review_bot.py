@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from factory.core import db
+from factory.core.clock import now_utc
 from factory.core.config import TelegramCfg
 from factory.core.decisions import Decision
 from factory.core.models import State, TopicStatus
@@ -263,3 +264,108 @@ class TestCommands:
         call(handler_of(bot_env["dispatcher"], "message")[1].callback(message))
 
         assert "свободных тем: 1" in message.answered[0]
+
+
+class TestApprovalIsHonest:
+    """Подтверждение не должно обещать того, чего не будет.
+
+    Владелец нажимает «Опубликовать», видит бодрое «уходит в группу» и тишину:
+    ключ ВК истёк, а тревога о нём уже висит и второй раз не придёт. Со стороны
+    это выглядит как проглоченное нажатие.
+    """
+
+    @pytest.fixture
+    def project(self, pipeline):
+        from factory.core.config import TelegramCfg
+
+        base = pipeline["project"]
+        return base.model_copy(
+            update={
+                "review": base.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER]),
+                "vk": base.vk.model_copy(
+                    update={"app_id": 54733282, "schedule": ["19:30", "21:00"]}
+                ),
+            }
+        )
+
+    def test_an_expired_key_is_named_instead_of_a_promise(self, bot_env, project):
+        from factory.core import alerts
+
+        conn = bot_env["conn"]
+        alerts.raise_once(
+            conn, bot_env["providers"].notifier, chat_id=OWNER,
+            name="vk_token", scope="demo", text="истёк",
+        )
+
+        text = review_bot._approval_text(conn, project, "demo")
+
+        assert "ключ" in text
+        assert "oauth.vk.com/authorize" in text
+        assert "слот" not in text, "обещали публикацию, которой не будет"
+
+    def test_the_owner_is_told_not_to_press_again(self, bot_env, project):
+        from factory.core import alerts
+
+        conn = bot_env["conn"]
+        alerts.raise_once(
+            conn, bot_env["providers"].notifier, chat_id=OWNER,
+            name="vk_token", scope="demo", text="истёк",
+        )
+
+        text = review_bot._approval_text(conn, project, "demo")
+
+        assert "повторно" in text or "не нужно" in text
+
+    def test_a_working_key_gives_the_exact_time(self, bot_env, project):
+        """«В ближайший слот» без часа читается как «сейчас»."""
+        text = review_bot._approval_text(bot_env["conn"], project, "demo")
+
+        assert ":" in text
+        assert "слот" in text
+
+    def test_without_a_schedule_it_says_so(self, bot_env, project):
+        naked = project.model_copy(update={"vk": project.vk.model_copy(update={"schedule": []})})
+
+        text = review_bot._approval_text(bot_env["conn"], naked, "demo")
+
+        assert "расписание не задано" in text
+
+
+class TestNextSlot:
+    def test_it_picks_the_coming_slot_today(self, pipeline):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from factory.core.steps.publish import next_slot_start
+
+        base = pipeline["project"]
+        project = base.model_copy(
+            update={"vk": base.vk.model_copy(update={"schedule": ["19:30", "21:00"]})}
+        )
+        moment = datetime(2026, 8, 25, 18, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+
+        assert next_slot_start(project, moment).strftime("%d %H:%M") == "25 19:30"
+
+    def test_after_the_last_slot_it_rolls_to_tomorrow(self, pipeline):
+        """Иначе вечером бот показывал бы время, которое уже прошло."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from factory.core.steps.publish import next_slot_start
+
+        base = pipeline["project"]
+        project = base.model_copy(
+            update={"vk": base.vk.model_copy(update={"schedule": ["19:30", "21:00"]})}
+        )
+        moment = datetime(2026, 8, 25, 23, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+
+        assert next_slot_start(project, moment).strftime("%d %H:%M") == "26 19:30"
+
+    def test_no_schedule_no_time(self, pipeline):
+        from factory.core.steps.publish import next_slot_start
+
+        base = pipeline["project"]
+        project = base.model_copy(update={"vk": base.vk.model_copy(update={"schedule": []})})
+
+        assert next_slot_start(project, now_utc()) is None
