@@ -18,7 +18,7 @@ from pathlib import Path
 from factory.core import db, paths
 from factory.core.clock import now_utc, to_iso
 from factory.core.models import Asset, State
-from factory.core.retry import tracked_call
+from factory.core.retry import cost_of, tracked_call
 from factory.core.steps import StepContext, StepResult, advanced
 from factory.providers.base import IMAGE_HEIGHT, IMAGE_WIDTH
 
@@ -35,12 +35,17 @@ def _still_on_disk(asset: Asset) -> bool:
     return bool(asset.local_path) and Path(asset.local_path).is_file()
 
 
-def _generate_one(ctx: StepContext, asset: Asset, target_dir: Path) -> tuple[int, str]:
-    """Generate one image and write it to disk. Returns the asset id and its path.
+def _generate_one(
+    ctx: StepContext, asset: Asset, target_dir: Path
+) -> tuple[int, str, float | None]:
+    """Generate one image and write it to disk.
 
-    Runs on a worker thread, so it must not touch the database: the SQLite
-    connection belongs to the main thread. Recording the path is the caller's job,
-    and it happens immediately — see :func:`run`.
+    Returns the asset id, its path and what the call cost. The price travels back
+    with the result rather than being added on the spot: this runs on a worker
+    thread, and ``ctx.spent`` is summed by the main thread — see :func:`run`.
+
+    Same reason the database is not touched here: the SQLite connection belongs
+    to the main thread.
     """
     data = ctx.providers.images.generate(
         asset.prompt or "",
@@ -51,7 +56,27 @@ def _generate_one(ctx: StepContext, asset: Asset, target_dir: Path) -> tuple[int
     )
     path = target_dir / f"{asset.kind}_{asset.position}.png"
     path.write_bytes(data)
-    return asset.id, str(path)
+    return asset.id, str(path), cost_of(data)
+
+
+def _charge(ctx: StepContext, price: float | None) -> None:
+    """Досчитать цену одной картинки к стоимости шага.
+
+    Складывается по мере поступления, а не в конце: если четвёртая картинка
+    сорвётся, три оплаченные уже учтены. ``tracked_call`` заберёт накопленное и
+    на пути ошибки тоже.
+
+    Считать обязательно, и вот почему это не мелочь. Картинки — почти вся цена
+    поста: текст стоит 0.14, четыре картинки — 6.7. Без этой строки отчёт о
+    тратах занижает расходы в сорок раз, а ``limits.max_cost_per_post`` слепнет
+    ровно к тому, ради чего заведён. Поймано на живом посте: в ``runs`` стояло
+    0.16 ₽ при реально потраченных 6.9.
+
+    Складывает главный поток: генерация идёт в пуле, и ``+=`` из нескольких
+    потоков теряет слагаемые.
+    """
+    if price is not None:
+        ctx.spent += price
 
 
 def _record_path(conn, asset_id: int, path: str) -> None:
@@ -95,8 +120,9 @@ def run(ctx: StepContext) -> StepResult:
 
     if workers == 1:
         for asset in pending:
-            asset_id, path = _generate_one(ctx, asset, target_dir)
+            asset_id, path, price = _generate_one(ctx, asset, target_dir)
             _record_path(ctx.conn, asset_id, path)
+            _charge(ctx, price)
             done += 1
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -106,8 +132,9 @@ def run(ctx: StepContext) -> StepResult:
             # Results are recorded as they arrive, from this thread. A failure in
             # one image then loses only that image, not the whole batch.
             for future in as_completed(futures):
-                asset_id, path = future.result()
+                asset_id, path, price = future.result()
                 _record_path(ctx.conn, asset_id, path)
+                _charge(ctx, price)
                 done += 1
 
     with db.write_transaction(ctx.conn):

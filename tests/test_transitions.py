@@ -15,6 +15,10 @@ from factory.providers.registry import build_providers
 from tests.conftest import insert_post, insert_project, insert_topic
 
 
+class _Bytes(bytes):
+    """Байты, к которым можно прикрепить цену: на голых bytes атрибут не живёт."""
+
+
 def post_row(conn, post_id):
     return conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
 
@@ -947,6 +951,44 @@ class TestCostIsRecorded:
         pipeline["run"](State.FACTCHECKED)
 
         assert self._runs(pipeline)[-1]["cost_usd"] == pytest.approx(0.0078)
+
+    def _priced_images(self, pipeline, value):
+        """Заглушка картинок с ценой: настоящая берёт её из ответа провайдера."""
+        from factory.core.retry import with_cost
+
+        provider = pipeline["providers"].images
+        original = provider.generate
+
+        def priced(prompt, **kwargs):
+            return with_cost(_Bytes(original(prompt, **kwargs)), value)
+
+        provider.generate = priced
+
+    def test_images_step_records_what_it_spent(self, pipeline):
+        """Картинки — почти вся цена поста, и до Этапа 4 она не считалась вовсе.
+
+        Текст стоит 0.14, четыре картинки — 6.7. Пропущенная здесь цена
+        занижала отчёт о тратах в сорок раз и ослепляла потолок расходов ровно
+        к тому, ради чего он заведён. Поймано на живом посте: в runs стояло
+        0.16 при реально потраченных 6.9.
+        """
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        self._priced_images(pipeline, 1.68)
+
+        pipeline["run"](State.PROMPTS_READY)
+
+        images = 1 + pipeline["project"].image.inline_count
+        assert self._runs(pipeline)[-1]["cost_usd"] == pytest.approx(1.68 * images)
+
+    def test_already_generated_images_are_not_charged_again(self, pipeline):
+        """Повтор шага не должен приписывать цену тому, что уже на диске."""
+        pipeline["advance_through"](State.QUEUED, State.TEXT_READY, State.FACTCHECKED)
+        self._priced_images(pipeline, 1.68)
+        pipeline["run"](State.PROMPTS_READY)
+
+        pipeline["run"](State.PROMPTS_READY)
+
+        assert self._runs(pipeline)[-1]["cost_usd"] is None
 
     def test_steps_without_provider_calls_record_nothing(self, pipeline):
         """Ноль вместо неизвестности занизил бы отчёт о тратах."""

@@ -23,8 +23,8 @@
       "    target_dir = paths.tmp_dir()"
     ],
     "копить пути и писать их одной транзакцией в конце шага": [
-      "            asset_id, path = _generate_one(ctx, asset, target_dir)\n            _record_path(ctx.conn, asset_id, path)\n            done += 1",
-      "            asset_id, path = _generate_one(ctx, asset, target_dir)\n            done += 1\n            if done == len(pending):\n                _record_path(ctx.conn, asset_id, path)"
+      "            asset_id, path, price = _generate_one(ctx, asset, target_dir)\n            _record_path(ctx.conn, asset_id, path)\n            _charge(ctx, price)\n            done += 1",
+      "            asset_id, path, price = _generate_one(ctx, asset, target_dir)\n            _charge(ctx, price)\n            done += 1\n            if done == len(pending):\n                _record_path(ctx.conn, asset_id, path)"
     ],
     "не передавать размер картинки явно": [
       "        width=IMAGE_WIDTH,\n        height=IMAGE_HEIGHT,",
@@ -37,6 +37,18 @@
     "класть все варианты в одну папку": [
       "    target_dir = paths.post_tmp_dir(ctx.post.id, ctx.post.version)",
       "    target_dir = paths.post_tmp_dir(ctx.post.id)"
+    ],
+    "не считать цену картинок": [
+      "    if price is not None:\n        ctx.spent += price",
+      "    pass"
+    ],
+    "считать цену только последней картинки": [
+      "    if price is not None:\n        ctx.spent += price",
+      "    if price is not None:\n        ctx.spent = price"
+    ],
+    "подменять неизвестную цену нулём": [
+      "            asset_id, path, price = _generate_one(ctx, asset, target_dir)",
+      "            asset_id, path, _ = _generate_one(ctx, asset, target_dir)\n            price = 0.0"
     ]
   }
 }
