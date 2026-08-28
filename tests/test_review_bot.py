@@ -156,13 +156,25 @@ class TestPermissions:
         assert state_of(bot_env) == State.APPROVED
 
     def test_a_reviewer_of_another_project_may_not(self, pipeline):
-        """Право нажать даёт список того проекта, чей это пост."""
+        """Право нажать даёт список того проекта, чей это пост.
+
+        Оба проекта загружены, и это принципиально: отказ здесь именно по
+        правам. Случай, когда конфиг проекта не прочитался, — отдельный, и
+        объясняется он по-другому, см. TestBrokenConfig.
+        """
         pipeline["advance_through"](
             State.QUEUED, State.TEXT_READY, State.FACTCHECKED,
             State.PROMPTS_READY, State.IMAGES_READY, State.COMPOSED,
         )
         pipeline["context"](State.IN_REVIEW)
         project = pipeline["project"]
+        # Пост принадлежит demo, а проверяющий записан только в «чужой».
+        own = project.model_copy(
+            update={
+                "review": project.review.model_copy(update={"mode": "telegram"}),
+                "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER + 1]),
+            }
+        )
         alien = project.model_copy(
             update={
                 "slug": "чужой",
@@ -170,13 +182,62 @@ class TestPermissions:
                 "telegram": TelegramCfg(provider="stub", chat_id=OWNER, reviewers=[OWNER]),
             }
         )
-        dispatcher = review_bot.build_dispatcher(pipeline["conn"], {"чужой": alien})
+        dispatcher = review_bot.build_dispatcher(
+            pipeline["conn"], {"demo": own, "чужой": alien}
+        )
 
         query = FakeQuery(data=f"r:{pipeline['post_id']}:ok", from_user=FakeUser(OWNER))
         call(named(dispatcher, "callback", "on_decision").callback(query))
 
         assert state_of(pipeline) == State.IN_REVIEW
         assert "не для вас" in query.said
+
+
+class TestBrokenConfig:
+    """Отказ по правам — не единственный возможный, и врать про него нельзя.
+
+    Список проверяющих живёт в конфиге проекта. Не прочитался конфиг — списка
+    нет, и владелец выглядит чужим. Проверено на живом развёртывании: на сервер
+    приехал конфиг новее кода, проект не загрузился, и на «/status» пришло
+    «Эта кнопка не для вас» — то есть система отправила владельца искать
+    поломку в правах, где её не было.
+    """
+
+    def test_no_projects_at_all_is_not_a_rights_problem(self):
+        assert review_bot._no_access({}) == review_bot.NO_CONFIG
+        assert "не в ваших правах" in review_bot.NO_CONFIG
+
+    def test_a_stranger_still_hears_about_rights(self, pipeline):
+        """Загруженный проект есть, человека в нём нет — это точно про права."""
+        assert review_bot._no_access({"demo": pipeline["project"]}) == review_bot.NOT_YOURS
+
+    def test_a_post_of_an_unloaded_project_is_a_config_problem(self, pipeline):
+        """Одна ниша сломалась, остальные живы: её посты не слушаются кнопок.
+
+        Сказать про права и здесь значит соврать: списка проверяющих для этого
+        поста просто нет.
+        """
+        loaded = {"живой": pipeline["project"]}
+
+        assert review_bot._no_access(loaded, "сломанный") == review_bot.NO_CONFIG
+
+    def test_the_text_fits_a_telegram_popup(self):
+        """Всплывающий ответ на нажатие Telegram обрезает на 200 символах.
+
+        Текст один на все места отказа, и если он не влезет — владелец получит
+        не объяснение, а ошибку отправки.
+        """
+        assert len(review_bot.NO_CONFIG) <= 200
+
+    def test_the_bot_says_it_on_a_command(self, pipeline):
+        """Не только на кнопке: владелец чаще всего натыкается на это в /status."""
+        dispatcher = review_bot.build_dispatcher(pipeline["conn"], {})
+        message = FakeMessage()
+        message.from_user = FakeUser(OWNER)
+
+        call(named(dispatcher, "message", "on_status").callback(message))
+
+        assert "не в ваших правах" in message.answered[0]
 
 
 class TestDecisions:

@@ -81,6 +81,24 @@ COMMANDS: tuple[tuple[str, str], ...] = (
 )
 
 NOT_YOURS = "Эта кнопка не для вас."
+
+#: Отказ по правам — не единственный возможный. Список проверяющих живёт в
+#: конфиге проекта, и если конфиг не прочитался, списка нет вовсе: тогда любой
+#: человек, включая владельца, выглядит чужим.
+#:
+#: Проверено на живом развёртывании. На сервер приехал конфиг новее кода, старый
+#: код отверг незнакомые поля, проект не загрузился — и владелец на «/status»
+#: получил «Эта кнопка не для вас». То есть система сказала «у тебя нет прав»
+#: там, где прав его никто не лишал, и отправила искать поломку туда, где её нет.
+#:
+#: Уложено в 200 символов намеренно: столько Telegram разрешает во всплывающем
+#: ответе на нажатие кнопки, а текст должен быть один и тот же везде.
+NO_CONFIG = (
+    "⚠️ Не читается ни один конфиг проекта: кнопки не работают ни у кого, дело "
+    "не в ваших правах. Обычно это опечатка в config.yaml или файл, не доехавший "
+    "на сервер."
+)
+
 ALREADY_DONE = "По этому посту решение уже принято."
 ALREADY_OUT = "Пост уже вышел в группу — отменить нельзя. Удалить его можно только в самой группе."
 
@@ -304,13 +322,17 @@ def build_dispatcher(
         post_id, decision, version = parsed
         slug = _project_of_post(conn, post_id)
 
-        if not _may_press(current(), slug, query.from_user.id):
+        # Конфиги читаются один раз на нажатие: между проверкой права и
+        # объяснением отказа они обязаны быть одними и теми же, иначе ответ
+        # объяснит не то, из-за чего отказали.
+        loaded = current()
+        if not _may_press(loaded, slug, query.from_user.id):
             # Молчать нельзя: со стороны это неотличимо от поломки.
             log.warning(
                 "нажатие от постороннего",
                 extra={"post_id": post_id, "user_id": query.from_user.id},
             )
-            await query.answer(NOT_YOURS, show_alert=True)
+            await query.answer(_no_access(loaded, slug), show_alert=True)
             return
 
         # Одобряют тот вариант, под которым нажали, а не последний сделанный.
@@ -346,7 +368,7 @@ async def _accept_vk_code(
 
     mine = _mine(projects, message.from_user.id)
     if not mine:
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects))
         return
 
     code = vk_auth.extract_code(message.text or "")
@@ -428,7 +450,7 @@ async def _accept_vk_token(
         if project.telegram and message.from_user.id in project.telegram.reviewers
     ]
     if not mine:
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects))
         return
 
     token = extract_vk_token(message.text or "")
@@ -453,7 +475,7 @@ async def _accept_vk_code(
 
     mine = _mine(projects, message.from_user.id)
     if not mine:
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects))
         return
 
     code = vk_auth.extract_code(message.text or "")
@@ -535,7 +557,7 @@ async def _accept_vk_token(
         if project.telegram and message.from_user.id in project.telegram.reviewers
     ]
     if not mine:
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects))
         return
 
     token = extract_vk_token(message.text or "")
@@ -588,12 +610,31 @@ def _mine(projects: dict[str, ProjectConfig], user_id: int) -> list[tuple[str, P
     ]
 
 
+def _no_access(projects: dict[str, ProjectConfig], slug: str | None = None) -> str:
+    """Чем объяснить отказ: правами или непрочитанным конфигом.
+
+    Вызывается там, где уже установлено, что нажимать человеку нельзя. Решается
+    здесь только одно — правду ли ему при этом скажут.
+
+    Подробностей ошибки в тексте нет намеренно: бота находят обычным поиском в
+    Telegram, и разбор чужого конфига случайному человеку показывать незачем.
+    """
+    if not projects:
+        return NO_CONFIG
+    # Отдельная ниша могла не загрузиться, пока остальные живы. Тогда её посты
+    # перестают слушаться кнопок, и владелец получает «не для вас» на собственном
+    # посте — тот же обман, только реже.
+    if slug is not None and slug not in projects:
+        return NO_CONFIG
+    return NOT_YOURS
+
+
 def _topics_text(
     conn: sqlite3.Connection, projects: dict[str, ProjectConfig], user_id: int
 ) -> str:
     mine = _mine(projects, user_id)
     if not mine:
-        return NOT_YOURS
+        return _no_access(projects)
 
     blocks = []
     for slug, _ in mine:
@@ -648,7 +689,7 @@ def _switch(
 ) -> str:
     mine = _mine(projects, user_id)
     if not mine:
-        return NOT_YOURS
+        return _no_access(projects)
 
     for slug, _ in mine:
         topics.set_paused(conn, slug, paused)
@@ -668,7 +709,7 @@ def _set_schedule(
 ) -> str:
     mine = _mine(projects, user_id)
     if not mine:
-        return NOT_YOURS
+        return _no_access(projects)
 
     for slug, _ in mine:
         topics.set_schedule_off(conn, slug, off)
@@ -686,7 +727,7 @@ def _schedule_text(
 ) -> str:
     mine = _mine(projects, user_id)
     if not mine:
-        return NOT_YOURS
+        return _no_access(projects)
 
     slug, project = mine[0]
     off = topics.schedule_is_off(conn, slug)
@@ -708,7 +749,7 @@ async def _switch_schedule(
     conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery
 ) -> None:
     if not _mine(projects, query.from_user.id):
-        await query.answer(NOT_YOURS, show_alert=True)
+        await query.answer(_no_access(projects), show_alert=True)
         return
 
     off = (query.data or "").endswith(":off")
@@ -742,7 +783,7 @@ async def _offer_topics(
 
     mine = _mine(projects, message.from_user.id)
     if not mine:
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects))
         return
 
     lines = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
@@ -794,7 +835,7 @@ async def _apply_pending_topics(
     conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery
 ) -> None:
     if not _mine(projects, query.from_user.id):
-        await query.answer(NOT_YOURS, show_alert=True)
+        await query.answer(_no_access(projects), show_alert=True)
         return
 
     parts = (query.data or "").split(":")
@@ -842,7 +883,7 @@ async def _accept_edit(
 
     slug = _project_of_post(conn, post_id)
     if not _may_press(projects, slug, message.from_user.id):
-        await message.answer(NOT_YOURS)
+        await message.answer(_no_access(projects, slug))
         return
 
     edit = edits.parse(message.text or "")
@@ -900,7 +941,7 @@ async def _handled_as_pseudo(
 
     slug = _project_of_post(conn, post_id)
     if not _may_press(projects, slug, query.from_user.id):
-        await query.answer(NOT_YOURS, show_alert=True)
+        await query.answer(_no_access(projects, slug), show_alert=True)
         return True
 
     if parts[2] == ASK_TRASH:
@@ -1110,7 +1151,7 @@ def _status_text(
         if project.telegram and user_id in project.telegram.reviewers
     ]
     if not mine:
-        return NOT_YOURS
+        return _no_access(projects)
 
     lines: list[str] = []
     for slug in mine:

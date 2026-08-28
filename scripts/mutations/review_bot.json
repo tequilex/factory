@@ -16,7 +16,7 @@
       "    project = next(iter(projects.values()), None)\n    if project is None or project.telegram is None:\n        return False"
     ],
     "молча игнорировать постороннего": [
-      "            await query.answer(NOT_YOURS, show_alert=True)\n            return",
+      "            await query.answer(_no_access(loaded, slug), show_alert=True)\n            return",
       "            return"
     ],
     "применять испорченную кнопку наугад": [
@@ -68,7 +68,7 @@
       "return \"✅ Уходит в группу в ближайший слот расписания.\""
     ],
     "править пост без проверки прав": [
-      "    if not _may_press(projects, slug, message.from_user.id):\n        await message.answer(NOT_YOURS)\n        return\n\n    edit = edits.parse",
+      "    if not _may_press(projects, slug, message.from_user.id):\n        await message.answer(_no_access(projects, slug))\n        return\n\n    edit = edits.parse",
       "    edit = edits.parse"
     ],
     "молчать про непонятный ответ": [
@@ -120,11 +120,11 @@
       "    if row is None:"
     ],
     "пускать постороннего к темам": [
-      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if not _mine(projects, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return",
-      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return"
+      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if not _mine(projects, query.from_user.id):\n        await query.answer(_no_access(projects), show_alert=True)\n        return",
+      "async def _apply_pending_topics(\n    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], query: CallbackQuery\n) -> None:\n    if False:\n        await query.answer(_no_access(projects), show_alert=True)\n        return"
     ],
     "пускать постороннего к паузе": [
-      "    mine = _mine(projects, user_id)\n    if not mine:\n        return NOT_YOURS\n\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)",
+      "    mine = _mine(projects, user_id)\n    if not mine:\n        return _no_access(projects)\n\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)",
       "    mine = list(projects.items())\n    for slug, _ in mine:\n        topics.set_paused(conn, slug, paused)"
     ],
     "не снимать тревогу о кончившихся темах": [
@@ -172,8 +172,8 @@
       "    if True:\n        return False"
     ],
     "пускать постороннего к переспросу": [
-      "    slug = _project_of_post(conn, post_id)\n    if not _may_press(projects, slug, query.from_user.id):\n        await query.answer(NOT_YOURS, show_alert=True)\n        return True",
-      "    slug = _project_of_post(conn, post_id)\n    if False:\n        await query.answer(NOT_YOURS, show_alert=True)\n        return True"
+      "    slug = _project_of_post(conn, post_id)\n    if not _may_press(projects, slug, query.from_user.id):\n        await query.answer(_no_access(projects, slug), show_alert=True)\n        return True",
+      "    slug = _project_of_post(conn, post_id)\n    if False:\n        await query.answer(_no_access(projects, slug), show_alert=True)\n        return True"
     ],
     "не давать пути назад из переспроса": [
       "    if parts[2] == ASK_TRASH:\n        await query.answer()\n        await _replace_markup(query, trash_keyboard(post_id, version))\n    else:\n        await query.answer(\"Оставляю.\")\n        await _replace_markup(query, review_keyboard(post_id, version))",
@@ -182,6 +182,18 @@
     "обещать слот при выключенном расписании": [
       "    if topics.schedule_is_off(conn, slug):",
       "    if paths.ignore_schedule():"
+    ],
+    "врать про права, когда не читается конфиг": [
+      "    if not projects:\n        return NO_CONFIG",
+      "    if False:\n        return NO_CONFIG"
+    ],
+    "молчать о непрочитанном конфиге отдельной ниши": [
+      "    if slug is not None and slug not in projects:\n        return NO_CONFIG",
+      "    if False:\n        return NO_CONFIG"
+    ],
+    "объяснять конфигом обычный отказ по правам": [
+      "    if not projects:\n        return NO_CONFIG",
+      "    if True:\n        return NO_CONFIG"
     ]
   }
 }
