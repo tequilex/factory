@@ -1,0 +1,58 @@
+{
+  "module": "factory/providers/images/openai_compatible.py",
+  "tests": "tests/test_images_openai.py",
+  "mutations": {
+    "не отправлять образец персонажа вовсе": [
+        "        if self.reference_url:\n            payload[\"image\"] = self.reference_url",
+        "        if False:\n            payload[\"image\"] = self.reference_url"
+    ],
+    "слать образец модели, которая его игнорирует": [
+        "            if reference and supports_reference",
+        "            if reference"
+    ],
+    "не передавать seed": [
+        "        if seed is not None:\n            payload[\"seed\"] = seed",
+        "        if False:\n            payload[\"seed\"] = seed"
+    ],
+    "не просить нужный размер": [
+        "            \"size\": f\"{width}x{height}\",",
+        "            \"size\": \"1024x1024\","
+    ],
+    "растягивать картинку вместо обрезки": [
+        "    image = image.convert(\"RGB\")",
+        "    image = image.convert(\"RGB\").resize((width, height), Image.LANCZOS)\n    buffer = io.BytesIO()\n    image.save(buffer, format=\"PNG\")\n    return buffer.getvalue()"
+    ],
+    "отдавать чужой размер как есть": [
+        "    if image.size == (width, height):\n        return data",
+        "    return data\n    if image.size == (width, height):\n        return data"
+    ],
+    "считать исчерпанный лимит ключа обычной перегрузкой": [
+        "        if response.status_code == 429 and _is_spending_limit(body):",
+        "        if False:"
+    ],
+    "объявить любой 429 требующим человека": [
+        "        if response.status_code == 429 and _is_spending_limit(body):",
+        "        if response.status_code == 429:"
+    ],
+    "потерять стоимость вызова": [
+        "        if isinstance(reported, (int, float)):\n            return float(reported)",
+        "        if False:\n            return float(reported)"
+    ],
+    "подменять неизвестную цену нулём": [
+        "        return self.price_per_image",
+        "        return self.price_per_image or 0.0"
+    ],
+    "предпочесть цену из конфига фактической": [
+        "        usage = data.get(\"usage\") or {}\n        reported = usage.get(\"cost\")",
+        "        usage = data.get(\"usage\") or {}\n        reported = self.price_per_image or usage.get(\"cost\")"
+    ],
+    "молча проглотить LoRA": [
+        "        if lora:",
+        "        if False:"
+    ],
+    "уронить KeyError вместо понятной ошибки": [
+        "        except (KeyError, IndexError, TypeError) as exc:",
+        "        except (IndexError, TypeError) as exc:"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "module": "factory/core/steps/prompts.py",
+  "tests": "tests/test_character.py",
+  "mutations": {
+    "не дописывать приметы персонажа": [
+        "    return \", \".join(part.strip(\" ,\") for part in (character, scene, style) if part.strip(\" ,\"))",
+        "    return \", \".join(part.strip(\" ,\") for part in (scene, style) if part.strip(\" ,\"))"
+    ],
+    "поставить приметы после сцены": [
+        "for part in (character, scene, style)",
+        "for part in (scene, character, style)"
+    ],
+    "не выбрасывать пустые части": [
+        "    return \", \".join(part.strip(\" ,\") for part in (character, scene, style) if part.strip(\" ,\"))",
+        "    return \", \".join(part.strip(\" ,\") for part in (character, scene, style))"
+    ],
+    "потерять приметы у сопровождающих картинок": [
+        "                scene_prompt(character, scene, style),",
+        "                scene_prompt(\"\", scene, style),"
+    ],
+    "потерять приметы у обложки": [
+        "            scene_prompt(character, scenes.cover, style),",
+        "            scene_prompt(\"\", scenes.cover, style),"
+    ]
+  }
+}

@@ -95,6 +95,32 @@ def _stub_images(config: ProjectConfig):
     return StubImages(model=config.image.model)
 
 
+def _openai_compatible_images(config: ProjectConfig):
+    from factory.core.config import resolve_secret
+    from factory.providers.images.openai_compatible import OpenAICompatibleImages
+
+    image = config.image
+    # Файл читается здесь, при сборке провайдера, а не при каждой картинке:
+    # он один на весь проект, и пропажу лучше заметить на старте тика, чем
+    # четырьмя платными вызовами позже.
+    reference = (
+        config.reference_path.read_bytes()
+        if config.reference_path is not None and config.reference_path.is_file()
+        else None
+    )
+
+    return OpenAICompatibleImages(
+        base_url=resolve_secret(image.base_url_env, context="адреса API для картинок"),
+        api_key=resolve_secret(image.api_key_env, context="модели картинок"),
+        key_env=image.api_key_env or "",
+        model=image.model,
+        reference=reference,
+        supports_reference=image.supports_reference,
+        price_per_image=image.price_per_image,
+        proxy_env=image.proxy_env,
+    )
+
+
 def _stub_publisher(config: ProjectConfig):
     from factory.providers.publishers.stub import StubPublisher
 
@@ -135,6 +161,7 @@ LLM_BUILDERS: dict[str, Callable[..., LLMProvider]] = {
 
 IMAGE_BUILDERS: dict[str, Callable[[ProjectConfig], ImageProvider]] = {
     "stub": _stub_images,
+    "openai_compatible": _openai_compatible_images,
 }
 
 PUBLISHER_BUILDERS: dict[str, Callable[[ProjectConfig], Publisher]] = {

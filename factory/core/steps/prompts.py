@@ -26,8 +26,17 @@ SYSTEM = (
 SEED_MAX = 2**31 - 1
 
 
-def _with_style(prompt: str, style: str) -> str:
-    return f"{prompt}, {style}" if style else prompt
+def scene_prompt(character: str, scene: str, style: str) -> str:
+    """Собрать промпт одной картинки: приметы, сцена, стиль съёмки.
+
+    Порядок не произвольный — именно в нём узнаваемость персонажа проверялась
+    живьём. Приметы впереди: то, что стоит в начале промпта, модель держит
+    заметно крепче, а держать надо человека, а не свет.
+
+    Пустые части выбрасываются: лишняя запятая в промпте — это лишний токен,
+    который модель читает как разделитель пустого понятия.
+    """
+    return ", ".join(part.strip(" ,") for part in (character, scene, style) if part.strip(" ,"))
 
 
 @tracked_call(State.FACTCHECKED)
@@ -47,13 +56,22 @@ def run(ctx: StepContext) -> StepResult:
     scenes = ctx.charge(ctx.providers.llm.complete(SYSTEM, user, schema=ScenePrompts))
 
     style = ctx.project.image.scene_style
+    character = ctx.project.image.character
     stamp = to_iso(now_utc())
     rows = [
-        (ctx.post.id, AssetKind.COVER, 0, _with_style(scenes.cover, style), random.randint(1, SEED_MAX), stamp)
+        (
+            ctx.post.id, AssetKind.COVER, 0,
+            scene_prompt(character, scenes.cover, style),
+            random.randint(1, SEED_MAX), stamp,
+        )
     ]
     for position, scene in enumerate(scenes.inline[:inline_count], start=1):
         rows.append(
-            (ctx.post.id, AssetKind.INLINE, position, _with_style(scene, style), random.randint(1, SEED_MAX), stamp)
+            (
+                ctx.post.id, AssetKind.INLINE, position,
+                scene_prompt(character, scene, style),
+                random.randint(1, SEED_MAX), stamp,
+            )
         )
 
     with db.write_transaction(ctx.conn):

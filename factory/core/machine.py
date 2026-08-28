@@ -252,6 +252,76 @@ def record_failure(conn: sqlite3.Connection, post: Post, exc: BaseException) -> 
     )
 
 
+def post_cost(conn: sqlite3.Connection, post_id: int) -> float:
+    """Сколько уже стоил пост, по записям в ``runs``.
+
+    ``COALESCE`` не украшение: ``SUM`` по пустой выборке возвращает ``NULL``, и
+    сравнение ``NULL > потолок`` в SQLite ложно всегда. Предохранитель, написанный
+    без него, пропускал бы вообще всё — и выглядел бы при этом работающим.
+    """
+    return float(
+        conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE post_id = ?", (post_id,)
+        ).fetchone()[0]
+    )
+
+
+def stop_if_too_expensive(
+    conn: sqlite3.Connection, post: Post, config: ProjectConfig, providers
+) -> bool:
+    """Остановить пост, если он перешёл ``limits.max_cost_per_post``.
+
+    Проверяется ПЕРЕД шагом, а не после: смысл потолка в том, чтобы не сделать
+    следующий платный вызов. Проверка после шага узнаёт о перерасходе, когда
+    деньги уже ушли.
+
+    Требование ``SPEC.md``, не выполненное на Этапе 1. Тогда это ничего не
+    значило: пост стоил 0.14 в валюте провайдера, и упереться в потолок было
+    нечем. С картинками цена поста выросла в сорок раз, и предохранитель стал
+    единственным, что стоит между зациклившимся шагом и счётом.
+    """
+    limit = config.limits.max_cost_per_post
+    spent = post_cost(conn, post.id)
+    if spent <= limit:
+        # Пост снова идёт — значит потолок подняли. Тревога, которая не снимается
+        # вместе с причиной, при следующем перерасходе промолчит.
+        if alerts.is_raised(conn, "budget", f"{config.slug}:{post.id}"):
+            alerts.clear(conn, "budget", f"{config.slug}:{post.id}")
+        return False
+
+    message = (
+        f"Пост стоил {spent:.2f} при потолке {limit:.2f} "
+        f"(limits.max_cost_per_post в конфиге проекта {config.slug})."
+    )
+    with db.write_transaction(conn):
+        conn.execute(
+            "UPDATE posts SET state = ?, last_error = ?, next_attempt_at = NULL, "
+            "updated_at = ? WHERE id = ?",
+            (State.FAILED, message, to_iso(now_utc()), post.id),
+        )
+
+    log.error(
+        "пост остановлен по потолку расходов",
+        extra={"post_id": post.id, "spent": spent, "limit": limit},
+    )
+
+    if config.telegram is not None:
+        try:
+            alerts.raise_once(
+                conn,
+                providers.notifier,
+                chat_id=config.telegram.chat_id,
+                name="budget",
+                scope=f"{config.slug}:{post.id}",
+                text=alerts.budget_exceeded_text(
+                    config.slug, post.id, post.title, spent, limit
+                ),
+            )
+        except Exception:  # noqa: BLE001 — уведомление о поломке не поломка
+            log.exception("не удалось сообщить о перерасходе")
+    return True
+
+
 def advance_post(
     conn: sqlite3.Connection,
     post: Post,
@@ -273,6 +343,9 @@ def advance_post(
         if post.is_terminal:
             break
 
+        if stop_if_too_expensive(conn, post, config, providers):
+            break
+
         ctx = StepContext(
             conn=conn,
             project=config,
@@ -284,7 +357,7 @@ def advance_post(
         try:
             result = handler_for(post.state)(ctx)
         except Exception as exc:  # noqa: BLE001 — recorded, then the chain stops
-            if getattr(exc, "token_expired", False):
+            if getattr(exc, "token_expired", False) or getattr(exc, "needs_human", False):
                 # Истёкший ключ ретраями не лечится: он не станет действительным
                 # сам. Считать это ошибкой значит сжигать бюджет попыток на
                 # ожидание человека — пост умирает за час, пока владелец спит,
@@ -309,6 +382,11 @@ def advance_post(
             break
 
         commit_transition(conn, post, result.next_state)
+        # Шаг прошёл — провайдер отвечает. Снимать тревогу здесь, а не только при
+        # действии владельца: лимит ключа могли поднять в личном кабинете, ничего
+        # системе об этом не сказав.
+        if alerts.is_raised(conn, "provider_blocked", config.slug):
+            alerts.clear(conn, "provider_blocked", config.slug)
         done += 1
         post = reload_post(conn, post.id)
 
@@ -323,8 +401,25 @@ def _alert_if_hopeless(conn: sqlite3.Connection, config, providers, exc: BaseExc
     помогает, — человек, а значит человека надо позвать, а не писать в лог,
     который он не читает.
     """
+    if config.telegram is None:
+        return
+
+    if getattr(exc, "needs_human", False):
+        # Отказ, который снимет только человек: исчерпанный лимит ключа, отозванный
+        # доступ. Тревога одна на проект, а не на пост: причина общая, и по
+        # тревоге на каждый пост владелец получил бы очередь одинаковых сообщений.
+        alerts.raise_once(
+            conn,
+            providers.notifier,
+            chat_id=config.telegram.chat_id,
+            name="provider_blocked",
+            scope=config.slug,
+            text=alerts.provider_blocked_text(config.slug, str(exc)),
+        )
+        return
+
     token_env = getattr(exc, "token_env", None)
-    if not getattr(exc, "token_expired", False) or config.telegram is None:
+    if not getattr(exc, "token_expired", False):
         return
 
     alerts.raise_once(
@@ -450,6 +545,13 @@ def _alert_failed_posts(conn, project, config, providers, chat_id: int) -> None:
     ).fetchall()
 
     for row in rows:
+        # Пост, остановленный потолком расходов, уже получил свою тревогу — с
+        # цифрами и без кнопки. Общая добавила бы второе сообщение об одном и том
+        # же, и в нём кнопку «Попробовать снова», которая упрётся в тот же
+        # потолок: потраченное уже потрачено.
+        if alerts.is_raised(conn, "budget", f"{config.slug}:{row['id']}"):
+            continue
+
         _drop_waiting(conn, providers, chat_id, row["id"])
         alerts.raise_once(
             conn, providers.notifier, chat_id=chat_id,

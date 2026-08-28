@@ -28,7 +28,7 @@ from factory.core.logging import get_logger
 # Which provider names a config may name. The implementations live in
 # factory/providers/registry.py; a test there asserts the two lists agree.
 LLM_PROVIDERS = ("stub", "openai_compatible", "anthropic")
-IMAGE_PROVIDERS = ("stub", "replicate")
+IMAGE_PROVIDERS = ("stub", "openai_compatible", "replicate")
 PUBLISHER_PROVIDERS = ("stub", "vk")
 NOTIFIER_PROVIDERS = ("stub", "telegram")
 
@@ -152,7 +152,62 @@ class ImageCfg(_Section):
     lora: str | None = None
     inline_count: int = Field(default=3, ge=0, le=9)
     api_key_env: str | None = None
+    base_url_env: str | None = None
     proxy_env: str | None = None
+
+    # Приметы персонажа: то, что дописывается к КАЖДОЙ сцене, чтобы на всех
+    # картинках был узнаваемо один человек. По-английски — промпт уходит в модель
+    # как есть. Проверено опытом: черты лица, пирсинг и стрижка держатся,
+    # подробный рисунок татуировки — нет. Поле, а не константа, именно поэтому:
+    # владелец убирает отсюда то, что у его модели плывёт.
+    character: str = ""
+
+    # Эталонный портрет внутри каталога проекта. Отправляется образцом вместе с
+    # промптом и держит лицо заметно лучше одних слов.
+    reference: str | None = None
+
+    # Принимает ли модель образец на самом деле. Объявляется, а не угадывается:
+    # проверено живьём, что gemini-2.5-flash-image отвечает 200, берёт деньги и
+    # рисует другого человека. Угадывание по имени модели однажды тихо отключит
+    # узнаваемость, и заметить это можно будет только глазами на готовом посте.
+    supports_reference: bool = False
+
+    # Запасная цена картинки, если провайдер не сообщает фактическую. В валюте
+    # провайдера — той же, что llm.price_* и limits.max_cost_per_post.
+    price_per_image: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _real_provider_needs_credentials(self) -> ImageCfg:
+        if self.provider == "stub":
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("api_key_env", self.api_key_env),
+                ("base_url_env", self.base_url_env),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"для image.provider: {self.provider} нужны поля {', '.join(missing)} — "
+                "имена переменных окружения с ключом и адресом API"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reference_must_be_used(self) -> ImageCfg:
+        # Образец, который никуда не уходит, — худший из тихих сбоев: файл на
+        # месте, промпт с приметами на месте, а персонаж на каждом посте разный,
+        # и никакой ошибки при этом нет.
+        if self.reference and not self.supports_reference:
+            raise ValueError(
+                "задан image.reference, но image.supports_reference: false — "
+                "образец никуда не будет отправлен. Либо поставь "
+                "supports_reference: true (убедившись, что модель его правда "
+                "учитывает), либо убери reference"
+            )
+        return self
 
 
 class PublisherCfg(_Section):
@@ -345,6 +400,11 @@ class ProjectConfig(_Section):
     def cover_template_path(self) -> Path:
         return self.root / self.image.cover_template
 
+    @property
+    def reference_path(self) -> Path | None:
+        """Эталонный портрет персонажа, если проект его завёл."""
+        return self.root / self.image.reference if self.image.reference else None
+
     def style_examples(self) -> list[str]:
         """Few-shot examples: every ``.md`` file in the examples directory."""
         return [
@@ -487,6 +547,11 @@ def _check_referenced_files(config: ProjectConfig) -> None:
         missing.append(f"  каталог с примерами стиля: {config.examples_dir}")
     if not config.cover_template_path.is_file():
         missing.append(f"  шаблон обложки: {config.cover_template_path}")
+    # Пропавший образец — не мелочь: без него генерация не падает, а просто
+    # перестаёт держать персонажа, и владелец узнаёт об этом по чужому лицу на
+    # готовом посте.
+    if config.reference_path is not None and not config.reference_path.is_file():
+        missing.append(f"  эталонный портрет персонажа: {config.reference_path}")
 
     if missing:
         raise ConfigError(

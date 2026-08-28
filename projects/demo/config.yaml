@@ -31,6 +31,28 @@ image:
   cover_template: templates/red_frame.json
   scene_style: "cinematic photo, overcast light, 35mm, shallow depth of field"
 
+  # Настоящая генерация выглядит так (здесь выключена: demo не ходит наружу):
+  #
+  # provider: openai_compatible
+  # api_key_env: LLM_API_KEY
+  # base_url_env: LLM_BASE_URL
+  # model: "black-forest-labs/flux.2-klein-4b"   # имя обязательно с организацией
+  # price_per_image: 1.68                        # если провайдер не сообщит свою
+  #
+  # Узнаваемость персонажа держится на двух полях. Приметы дописываются в начало
+  # каждого промпта, эталонный портрет уходит образцом вместе с ним:
+  #
+  # character: >-
+  #   woman, 27 years old, slim athletic build, shoulder-length dark brown hair,
+  #   green eyes, small silver septum piercing
+  # reference: character/canon.png
+  # supports_reference: true
+  #
+  # supports_reference объявляется, а не угадывается. Проверено живьём:
+  # gemini-2.5-flash-image принимает образец, отвечает 200, берёт деньги — и
+  # рисует другого человека. Поставить здесь true для такой модели значит
+  # платить за узнаваемость и не получать её, без единой ошибки в логе.
+
 publisher:
   provider: stub
 

@@ -1,0 +1,42 @@
+{
+  "module": "factory/core/machine.py",
+  "tests": "tests/test_cost_limit.py",
+  "mutations": {
+    "не проверять потолок вовсе": [
+      "        if stop_if_too_expensive(conn, post, config, providers):\n            break",
+      "        if False:\n            break"
+    ],
+    "проверять потолок после шага, когда деньги уже ушли": [
+      "        if stop_if_too_expensive(conn, post, config, providers):\n            break\n\n        ctx = StepContext(",
+      "        ctx = StepContext("
+    ],
+    "потерять COALESCE и пропускать всё": [
+      "            \"SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE post_id = ?\", (post_id,)",
+      "            \"SELECT SUM(cost_usd) FROM runs WHERE post_id = ?\", (post_id,)"
+    ],
+    "считать расходы всех постов сразу": [
+      "            \"SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE post_id = ?\", (post_id,)",
+      "            \"SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE post_id >= ?\", (post_id,)"
+    ],
+    "останавливать пост ровно на потолке": [
+      "    if spent <= limit:",
+      "    if spent < limit:"
+    ],
+    "не переводить дорогой пост в failed": [
+      "            (State.FAILED, message, to_iso(now_utc()), post.id),",
+      "            (post.state, message, to_iso(now_utc()), post.id),"
+    ],
+    "молчать о перерасходе": [
+      "            alerts.raise_once(\n                conn,\n                providers.notifier,\n                chat_id=config.telegram.chat_id,\n                name=\"budget\",",
+      "            _ = lambda **kw: None\n            _(\n                conn,\n                providers.notifier,\n                chat_id=config.telegram.chat_id,\n                name=\"budget\","
+    ],
+    "не снимать тревогу после поднятия потолка": [
+      "        if alerts.is_raised(conn, \"budget\", f\"{config.slug}:{post.id}\"):\n            alerts.clear(conn, \"budget\", f\"{config.slug}:{post.id}\")",
+      "        pass"
+    ],
+    "слать вторую тревогу с бесполезной кнопкой": [
+      "        if alerts.is_raised(conn, \"budget\", f\"{config.slug}:{row['id']}\"):\n            continue",
+      "        pass"
+    ]
+  }
+}
