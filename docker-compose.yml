@@ -1,0 +1,87 @@
+# Три службы на Raspberry Pi: прокси, воркер, бот.
+#
+# Главное, ради чего всё это затевалось, — `restart: unless-stopped`. За один
+# день живой работы воркер падал трижды, и каждый раз владелец узнавал об этом
+# так: нажимал кнопку и не получал результата.
+#
+# Память на малине — гигабайт, поэтому лимиты выставлены явно. Без них один
+# распухший процесс уводит в своп всю машину, и снаружи это выглядит как
+# «всё зависло», а не «одному сервису поплохело».
+
+services:
+  # Прокси для Telegram. ВК и модели ходят мимо него напрямую: они российские,
+  # и заграничный выход им только вредит. Разделение задаётся не здесь, а
+  # переменной TELEGRAM_PROXY в файле секретов — см. core/http.py.
+  proxy:
+    image: metacubex/mihomo:latest
+    container_name: factory-proxy
+    restart: unless-stopped
+    volumes:
+      - ./proxy:/root/.config/mihomo
+    # Порт наружу не выставляется: к прокси обращаются только соседние
+    # контейнеры по имени, из домашней сети он не нужен и светить его незачем.
+    expose:
+      - "7890"
+    mem_limit: 128m
+    logging: &logs
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    build: .
+    image: factory:latest
+    container_name: factory-worker
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    volumes:
+      - ./data:/data
+      - ./projects:/projects:ro
+    env_file:
+      - ./data/.env
+    environment:
+      FACTORY_DATA_DIR: /data
+      FACTORY_PROJECTS_DIR: /projects
+      FACTORY_TICK_INTERVAL_SEC: "60"
+      # Прокси виден соседям по имени службы. Порт тот, что mihomo слушает
+      # по умолчанию для смешанного режима.
+      TELEGRAM_PROXY: socks5://proxy:7890
+    command: ["factory", "run", "--loop"]
+    # Проверяется хартбит, а не «процесс жив»: процесс может быть жив и не
+    # двигаться — именно так выглядели все падения на живой работе.
+    healthcheck:
+      test: ["CMD", "factory", "healthcheck"]
+      interval: 2m
+      timeout: 15s
+      start_period: 2m
+      retries: 3
+    mem_limit: 320m
+    logging: *logs
+
+  bot:
+    build: .
+    image: factory:latest
+    container_name: factory-bot
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    volumes:
+      - ./data:/data
+      - ./projects:/projects:ro
+    env_file:
+      - ./data/.env
+    environment:
+      FACTORY_DATA_DIR: /data
+      FACTORY_PROJECTS_DIR: /projects
+      TELEGRAM_PROXY: socks5://proxy:7890
+    command: ["factory", "bot"]
+    # Проверки здоровья нет намеренно: бот не пишет хартбит, а «процесс жив»
+    # ничего не добавляет к политике перезапуска. За тем, что бот работает,
+    # следит владелец — он с ним разговаривает.
+    mem_limit: 256m
+    logging: *logs
+
+# Тома не именованные, а каталогами рядом с проектом: владельцу нужно уметь
+# скопировать базу и секреты обычным `cp`, не разбираясь, где Docker их прячет.

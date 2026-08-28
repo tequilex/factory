@@ -93,7 +93,14 @@ def projects_dir() -> Path:
 
 
 def migrations_dir() -> Path:
-    """Numbered ``.sql`` files. Ships next to the package inside the image."""
+    """Numbered ``.sql`` files, next to the package in a source checkout.
+
+    Inside the image the package lives in ``site-packages`` and this default
+    points at a directory that is not there, so the Dockerfile sets
+    ``FACTORY_MIGRATIONS_DIR`` explicitly. Found by running the built image:
+    ``factory init`` failed on the first command with «каталог с миграциями не
+    найден».
+    """
     override = os.environ.get("FACTORY_MIGRATIONS_DIR")
     if override:
         return Path(override).expanduser()

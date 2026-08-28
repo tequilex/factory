@@ -692,3 +692,67 @@ class TestRetryClearsReviewMarks:
         conn.close()
         assert row["review_album_at"] is None, "пост вернётся на ревью без картинок"
         assert row["review_message_id"] is None
+
+
+class TestHealthcheck:
+    """Проверка для Docker. От `doctor` отличается тем, что молчит о неважном.
+
+    `doctor` возвращает ненулевой код на любое замечание — кончились темы, нет
+    проектов. Для человека это правильно, для перезапуска контейнера нет:
+    Docker начал бы перезапускать здоровую систему из-за пустой очереди тем.
+    """
+
+    def test_a_fresh_heartbeat_is_healthy(self, tmp_env, demo_project):
+        from factory.core import db as db_module
+        from factory.core import lock
+
+        run("init")
+        conn = db_module.open_db()
+        lock.write_heartbeat(conn)
+        conn.close()
+
+        result = run("healthcheck")
+
+        assert result.exit_code == 0
+
+    def test_a_silent_worker_is_unhealthy(self, tmp_env, demo_project):
+        from datetime import timedelta
+
+        from factory.core import db as db_module
+        from factory.core.clock import now_utc, to_iso
+
+        run("init")
+        conn = db_module.open_db()
+        with db_module.write_transaction(conn):
+            conn.execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(hours=1)), to_iso(now_utc())),
+            )
+        conn.close()
+
+        result = run("healthcheck")
+
+        assert result.exit_code == 1
+        assert "60 мин назад" in result.output
+
+    def test_a_system_that_never_ticked_is_unhealthy(self, tmp_env, demo_project):
+        run("init")
+
+        result = run("healthcheck")
+
+        assert result.exit_code == 1
+        assert "ни разу" in result.output
+
+    def test_an_empty_topic_queue_is_not_a_reason_to_restart(self, tmp_env, demo_project):
+        """Главное отличие от doctor: контейнер не перезапускается из-за тем."""
+        from factory.core import db as db_module
+        from factory.core import lock
+
+        run("init")
+        run("project", "add", "demo")
+        conn = db_module.open_db()
+        lock.write_heartbeat(conn)
+        conn.close()
+
+        assert run("doctor").exit_code == 1, "doctor обязан жаловаться на пустые темы"
+        assert run("healthcheck").exit_code == 0, "контейнер перезапустится из-за тем"

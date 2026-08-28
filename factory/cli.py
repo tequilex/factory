@@ -171,6 +171,35 @@ def unlock() -> None:
 
 
 @app.command()
+def healthcheck() -> None:
+    """Жив ли воркер. Для Docker: код 0 — здоров, 1 — нет.
+
+    Отдельно от `doctor` намеренно. `doctor` рассказывает обо всём, включая
+    вещи, требующие внимания, но не мешающие работать: кончились темы, нет
+    проектов. Для человека это правильно, для перезапуска контейнера — нет:
+    Docker увидит ненулевой код и начнёт перезапускать здоровую систему по
+    кругу из-за пустой очереди тем.
+
+    Здесь проверяется ровно одно: тик отработал недавно.
+    """
+    from factory.core import lock
+
+    conn = open_database()
+    try:
+        stale = lock.heartbeat_is_stale(conn)
+        age = lock.heartbeat_age_sec(conn)
+    finally:
+        conn.close()
+
+    if stale:
+        when = "ни разу" if age is None else f"{int(age // 60)} мин назад"
+        typer.echo(f"Воркер не отрабатывал: {when}.")
+        raise typer.Exit(1)
+
+    typer.echo(f"Воркер отработал {int((age or 0))} с назад.")
+
+
+@app.command()
 def bot() -> None:
     """Запустить Telegram-бота: принимать решения владельца по постам."""
     from factory.bot import review_bot
