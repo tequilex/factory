@@ -696,6 +696,83 @@ telegram:
 
 ---
 
+## Разработка локально
+
+Порядок такой: пишете и проверяете на ноутбуке, заливаете в репозиторий,
+малина забирает и пересобирает.
+
+### Быстрый круг: правка и тесты
+
+Для работы над кодом Docker не нужен и только замедляет:
+
+```bash
+uv run pytest                    # все тесты
+uv run pytest tests/test_edits.py -v
+uv run python scripts/mutation_check.py scripts/mutations/decisions.json
+```
+
+### Проверить, что работает как на малине
+
+Тот же образ, та же сборка, но своя база и заглушки вместо настоящих сервисов:
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+docker compose -f docker-compose.local.yml logs -f
+docker compose -f docker-compose.local.yml down
+```
+
+Локально подключается `projects/demo` — там все провайдеры заглушки, наружу
+система не ходит и в группу ничего не публикует.
+
+### Три правила, чтобы не сломать боевую
+
+1. **Своя база.** Локальный стек работает с `./data-local`, боевой — с
+   `./data`. Не смешивать: посты разойдутся, и понять, какой настоящий, будет
+   нельзя.
+2. **Никогда два воркера на одну группу.** Защита от дублей живёт в базе, а
+   базы разные — она не сработает, и в группу уедут два поста вместо одного.
+3. **Никогда два бота на один токен.** Telegram не разрешает двум процессам
+   опрашивать один токен: они перехватывают нажатия друг у друга, и вы видите
+   случайные пропажи. Нужен бот локально — заведите **второго** у @BotFather и
+   пропишите его токен в `data-local/.env`.
+
+### Выкатить на малину
+
+```bash
+git add -A && git commit -m "что сделал" && git push
+ssh tequilex@192.168.3.19 "cd ~/factory && git pull && docker compose up -d --build"
+```
+
+Проверить, что доехало:
+
+```bash
+ssh tequilex@192.168.3.19 "cd ~/factory && docker compose ps && docker compose logs --since 2m worker"
+```
+
+### Откатиться, если новая версия сломалась
+
+```bash
+ssh tequilex@192.168.3.19 "cd ~/factory && git log --oneline | head -5"
+ssh tequilex@192.168.3.19 "cd ~/factory && git checkout НОМЕР_КОММИТА && docker compose up -d --build"
+```
+
+Вернуться на свежую версию потом: `git checkout main`.
+
+### Что НЕ едет через git
+
+Секреты (`data/.env`) и боевые проекты (`projects/vk_demo/`) в репозитории не
+лежат — он публичный. Они переносятся один раз, вручную:
+
+```bash
+scp -r projects/vk_demo tequilex@192.168.3.19:~/factory/projects/
+scp ~/factory-data/.env tequilex@192.168.3.19:~/factory/data/.env
+ssh tequilex@192.168.3.19 "chmod 600 ~/factory/data/.env"
+```
+
+Меняются они редко, поэтому обновление кода этого не требует.
+
+---
+
 ## Обслуживание
 
 ### Сделать бэкап руками
