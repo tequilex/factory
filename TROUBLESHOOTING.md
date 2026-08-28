@@ -166,3 +166,16 @@ grep TELEGRAM_BOT_TOKEN ~/factory-data/.env
 # подставить токен вместо <ТОКЕН>
 curl -s "https://api.telegram.org/bot<ТОКЕН>/getMyCommands"
 ```
+
+
+## Разработка локально
+
+| Симптом | Причина | Что делать |
+|---------|---------|------------|
+| `permission denied` на `data/.env` | файл забрал себе root после обновления ключа | `sudo chown $USER data/.env`; контейнеры должны идти с `user: "1000:1000"` |
+| `service worker depends on undefined service proxy` | пытаются собрать локальный файл вместе с боевым | локальный файл самодостаточен: `-f docker-compose.local.yml` без второго `-f` |
+| Бот в Telegram отвечает через раз | запущены два бота на одном токене | остановить локального; для песочницы завести **второго** бота у @BotFather |
+| В группу уехали два одинаковых поста | работали два воркера на одну группу | остановить лишний; базы разные, защита от дубля их не видит |
+| Локальный воркер пишет `projects: 0` | в песочнице не подключён проект | `docker compose -f docker-compose.local.yml exec worker factory project add demo` |
+| Правки не доехали до малины | забыт `git push` или `--build` | `git push`, затем на малине `git pull && docker compose up -d --build` |
+| Малина работает на старом коде | образ не пересобран | `docker compose up -d --build`, без `--build` берётся прежний образ |
