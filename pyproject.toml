@@ -10,6 +10,7 @@ dependencies = [
     "pillow>=10.3",
     "typer>=0.12",
     "aiogram>=3.15,<4",
+    "aiohttp-socks>=0.9",
 ]
 
 [project.scripts]

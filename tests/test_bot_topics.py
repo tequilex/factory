@@ -785,3 +785,37 @@ class TestTrashAsksWhatExactly:
 
         assert "не для вас" in query.said
         assert query.message.last_markup is None
+
+
+class TestTheBotGoesThroughTheProxy:
+    """aiogram ходит своим клиентом и core/http.py не использует.
+
+    Из-за этого настройка telegram.proxy_env его не касалась вовсе: на малине
+    воркер отправлял посты через прокси, а бот молчал с таймаутом, потому что
+    шёл напрямую в заблокированный Telegram.
+    """
+
+    def test_a_proxy_is_used_when_configured(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_PROXY", "socks5://proxy:7890")
+
+        assert review_bot._session() is not None
+
+    def test_without_a_proxy_the_connection_is_direct(self, monkeypatch):
+        for name in ("TELEGRAM_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+            monkeypatch.delenv(name, raising=False)
+
+        assert review_bot._session() is None
+
+    def test_it_asks_the_same_resolver_as_the_worker(self, monkeypatch):
+        """Две настройки прокси для одного Telegram разойдутся при первой правке."""
+        from factory.core import http
+
+        monkeypatch.setenv("TELEGRAM_PROXY", "socks5://proxy:7890")
+        seen = []
+        monkeypatch.setattr(
+            http, "proxy_for", lambda provider, **kw: seen.append(provider) or None
+        )
+
+        review_bot._session()
+
+        assert seen == ["telegram"]

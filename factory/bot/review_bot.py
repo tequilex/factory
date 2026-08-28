@@ -1067,8 +1067,32 @@ async def _publish_menu(bot: Bot) -> None:
         log.warning("не удалось обновить меню команд", extra={"reason": str(exc)})
 
 
+def _session():
+    """HTTP-клиент бота, при необходимости через прокси.
+
+    aiogram ходит своим клиентом и ``core/http.py`` не использует — значит
+    настройка ``telegram.proxy_env`` его не касалась вовсе. На малине это
+    вскрылось сразу: воркер отправлял посты через прокси, а бот молчал с
+    таймаутом, потому что шёл напрямую в заблокированный Telegram.
+
+    Адрес берётся тем же разрешателем, что у воркера: две разные настройки
+    прокси для одного и того же Telegram — гарантированное расхождение.
+    """
+    # aiohttp-socks нужен aiogram для любого прокси, включая обычный http.
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    from factory.core import http
+
+    proxy = http.proxy_for("telegram")
+    if not proxy:
+        return None
+
+    log.info("бот ходит через прокси", extra={"proxy": proxy})
+    return AiohttpSession(proxy=proxy)
+
+
 async def _poll(token: str, dispatcher: Dispatcher, conn: sqlite3.Connection) -> None:
-    bot = Bot(token=token)
+    bot = Bot(token=token, session=_session())
     watcher = asyncio.create_task(_watch_worker(conn))
     try:
         # Накопившиеся за простой нажатия НЕ сбрасываем. Нажал владелец
