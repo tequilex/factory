@@ -334,7 +334,13 @@ def _alert_if_hopeless(conn: sqlite3.Connection, config, providers, exc: BaseExc
         name="vk_token",
         scope=config.slug,
         text=alerts.vk_token_expired_text(
-            config.slug, token_env or "VK_UPLOAD_TOKEN", config.vk.app_id
+            config.slug,
+            token_env or "VK_UPLOAD_TOKEN",
+            config.vk.app_id,
+            # Обмен кода доступен, только если задан защищённый ключ приложения.
+            # Без него остаётся старая схема, и звать за кодом бессмысленно.
+            by_code=bool(config.vk.app_secret_env),
+            wrong_address=bool(getattr(exc, "wrong_address", False)),
         ),
     )
 

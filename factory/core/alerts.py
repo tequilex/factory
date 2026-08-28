@@ -41,9 +41,20 @@ VK_AUTHORIZE = (
 )
 
 
-def vk_token_url(app_id: int | None) -> str | None:
-    """Ссылка на получение ключа, если известно приложение владельца."""
-    return VK_AUTHORIZE.format(app_id=app_id) if app_id else None
+def vk_token_url(app_id: int | None, *, by_code: bool = False) -> str | None:
+    """Ссылка на получение ключа, если известно приложение владельца.
+
+    ``by_code`` — просить одноразовый код вместо готового ключа. Тогда ключ
+    выпишет себе сама система, и он привяжется к её адресу: обновлять можно
+    откуда угодно, хоть из отпуска под чужим VPN.
+    """
+    if not app_id:
+        return None
+    if by_code:
+        from factory.core.vk_auth import authorize_url
+
+        return authorize_url(app_id)
+    return VK_AUTHORIZE.format(app_id=app_id)
 
 
 def _key(name: str, scope: str) -> str:
@@ -104,13 +115,32 @@ def clear(conn: sqlite3.Connection, name: str, scope: str) -> None:
         conn.execute("DELETE FROM meta WHERE key = ?", (_key(name, scope),))
 
 
-def vk_token_expired_text(project: str, token_env: str, app_id: int | None = None) -> str:
-    """Текст про протухший ключ ВК: что делать, а не что сломалось."""
-    head = (
-        f"⚠️ [{project}] Публикация встала: ключ загрузки картинок в ВК истёк.\n\n"
-        "Он живёт 24 часа, продлить нельзя — так устроен ВК.\n\n"
-    )
-    link = vk_token_url(app_id)
+def vk_token_expired_text(
+    project: str,
+    token_env: str,
+    app_id: int | None = None,
+    *,
+    by_code: bool = False,
+    wrong_address: bool = False,
+) -> str:
+    """Текст про негодный ключ ВК: что делать, а не что сломалось.
+
+    ``wrong_address`` — ключ не истёк, а выписан на другой адрес. Со стороны ВК
+    это тот же код ошибки, но причина и лечение разные, и «истёк» про свежий
+    ключ владельца только запутает.
+    """
+    if wrong_address:
+        head = (
+            f"⚠️ [{project}] Публикация встала: ключ ВК выписан на другой адрес.\n\n"
+            "ВК привязывает ключ к тому, кто его получил. Похоже, ссылку "
+            "открыли под VPN или с другого устройства.\n\n"
+        )
+    else:
+        head = (
+            f"⚠️ [{project}] Публикация встала: ключ загрузки картинок в ВК истёк.\n\n"
+            "Он живёт 24 часа, продлить нельзя — так устроен ВК.\n\n"
+        )
+    link = vk_token_url(app_id, by_code=by_code)
     if link is None:
         # Без приложения ссылку не собрать. Врать готовым решением нельзя:
         # неработающая ссылка хуже честной отсылки к инструкции.
@@ -120,13 +150,18 @@ def vk_token_expired_text(project: str, token_env: str, app_id: int | None = Non
             f"Чтобы я присылал готовую ссылку, укажи vk.app_id в конфиге проекта.\n"
             f"Переменная: {token_env}"
         )
+    tail = (
+        "Откуда угодно: ключ выпишу себе я, и он привяжется к моему адресу."
+        if by_code
+        else "Важно: открывать без VPN, иначе ключ привяжется к чужому адресу."
+    )
     return head + (
         "Что сделать (полминуты):\n"
         "1. Открыть ссылку ниже и разрешить доступ.\n"
         "2. Скопировать из адресной строки браузера ВЕСЬ адрес.\n"
         "3. Прислать его мне сюда одним сообщением.\n\n"
         f"{link}\n\n"
-        "Ключ подставится сам, посты поедут дальше. "
+        f"{tail}\n"
         f"Переменная: {token_env}"
     )
 

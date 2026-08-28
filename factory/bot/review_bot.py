@@ -132,6 +132,17 @@ async def _refresh_keyboard(
         log.info("не удалось обновить кнопки", extra={"reason": str(exc)})
 
 
+def _looks_like_a_vk_code(message: Message) -> bool:
+    """Есть ли в сообщении одноразовый код ВК.
+
+    Проверяется раньше ключа: код короче и строже по виду, а спутать их нельзя —
+    ключ начинается с «vk1.», код это шестнадцатеричная строка.
+    """
+    from factory.core.vk_auth import extract_code
+
+    return extract_code(message.text or "") is not None
+
+
 def _looks_like_a_vk_key(message: Message) -> bool:
     """Есть ли в сообщении ключ ВК.
 
@@ -326,6 +337,193 @@ def build_dispatcher(
         return True
 
     return dispatcher
+
+
+async def _accept_vk_code(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
+) -> None:
+    from factory.core import vk_auth
+
+    mine = _mine(projects, message.from_user.id)
+    if not mine:
+        await message.answer(NOT_YOURS)
+        return
+
+    code = vk_auth.extract_code(message.text or "")
+    if code is None:
+        return
+
+    await _forget(message)
+
+    slug, project = mine[0]
+    if not (project.vk.app_id and project.vk.app_secret_env):
+        await message.answer(
+            f"У проекта [{slug}] не заданы vk.app_id и vk.app_secret_env — "
+            "обменять код не на что. Пришлите готовый ключ либо добавьте их в "
+            "конфиг."
+        )
+        return
+
+    try:
+        secret = resolve_secret(project.vk.app_secret_env, context="приложения ВК")
+        token = vk_auth.exchange(
+            code,
+            app_id=project.vk.app_id,
+            secret=secret,
+            proxy_env=project.vk.proxy_env,
+        )
+    except FactoryError as exc:
+        await message.answer(str(exc))
+        return
+
+    await _store_vk_token(conn, mine, token, message, by_code=True)
+
+
+async def _store_vk_token(
+    conn: sqlite3.Connection,
+    mine: list[tuple[str, ProjectConfig]],
+    token: str,
+    message: Message,
+    *,
+    by_code: bool = False,
+) -> None:
+    """Записать ключ в секреты и снять тревогу. Общее для обеих схем."""
+    updated: list[str] = []
+    for slug, project in mine:
+        name = project.vk.upload_token_env
+        if not name:
+            await message.answer(f"У проекта [{slug}] не задано поле vk.upload_token_env.")
+            continue
+        try:
+            secrets.update_secret(name, token)
+        except FactoryError as exc:
+            await message.answer(str(exc))
+            return
+        alerts.clear(conn, "vk_token", slug)
+        updated.append(name)
+        log.info("ключ ВК обновлён владельцем", extra={"slug": slug, "name": name})
+
+    if not updated:
+        return
+
+    how = (
+        "Ключ выписан на мой адрес — значит будет работать, откуда бы вы его ни "
+        "обновляли."
+        if by_code
+        else "Ваше сообщение я удалил."
+    )
+    await message.answer(
+        f"Ключ принят и сохранён ({', '.join(sorted(set(updated)))}).\n{how}\n\n"
+        "Публикация продолжится сама в ближайшую минуту — перезапускать ничего "
+        "не нужно."
+    )
+
+
+async def _accept_vk_token(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
+) -> None:
+    mine = [
+        (slug, project)
+        for slug, project in projects.items()
+        if project.telegram and message.from_user.id in project.telegram.reviewers
+    ]
+    if not mine:
+        await message.answer(NOT_YOURS)
+        return
+
+    token = extract_vk_token(message.text or "")
+    if token is None:
+        await message.answer(
+            "В сообщении нет ключа. Нужен весь адрес из строки браузера — "
+            "тот, что начинается на https://oauth.vk.ru/blank.html#access_token=..."
+        )
+        return
+
+    # Сообщение с ключом убирается из переписки сразу. Ключ даёт доступ к
+    # сообществу; висеть в истории он не должен.
+    await _forget(message)
+
+    await _store_vk_token(conn, mine, token, message)
+
+
+async def _accept_vk_code(
+    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
+) -> None:
+    from factory.core import vk_auth
+
+    mine = _mine(projects, message.from_user.id)
+    if not mine:
+        await message.answer(NOT_YOURS)
+        return
+
+    code = vk_auth.extract_code(message.text or "")
+    if code is None:
+        return
+
+    await _forget(message)
+
+    slug, project = mine[0]
+    if not (project.vk.app_id and project.vk.app_secret_env):
+        await message.answer(
+            f"У проекта [{slug}] не заданы vk.app_id и vk.app_secret_env — "
+            "обменять код не на что. Пришлите готовый ключ либо добавьте их в "
+            "конфиг."
+        )
+        return
+
+    try:
+        secret = resolve_secret(project.vk.app_secret_env, context="приложения ВК")
+        token = vk_auth.exchange(
+            code,
+            app_id=project.vk.app_id,
+            secret=secret,
+            proxy_env=project.vk.proxy_env,
+        )
+    except FactoryError as exc:
+        await message.answer(str(exc))
+        return
+
+    await _store_vk_token(conn, mine, token, message, by_code=True)
+
+
+async def _store_vk_token(
+    conn: sqlite3.Connection,
+    mine: list[tuple[str, ProjectConfig]],
+    token: str,
+    message: Message,
+    *,
+    by_code: bool = False,
+) -> None:
+    """Записать ключ в секреты и снять тревогу. Общее для обеих схем."""
+    updated: list[str] = []
+    for slug, project in mine:
+        name = project.vk.upload_token_env
+        if not name:
+            await message.answer(f"У проекта [{slug}] не задано поле vk.upload_token_env.")
+            continue
+        try:
+            secrets.update_secret(name, token)
+        except FactoryError as exc:
+            await message.answer(str(exc))
+            return
+        alerts.clear(conn, "vk_token", slug)
+        updated.append(name)
+        log.info("ключ ВК обновлён владельцем", extra={"slug": slug, "name": name})
+
+    if not updated:
+        return
+
+    how = (
+        "Ключ выписан на мой адрес — значит будет работать, откуда бы вы его ни "
+        "обновляли."
+        if by_code
+        else "Ваше сообщение я удалил."
+    )
+    await message.answer(
+        f"Ключ принят и сохранён ({', '.join(sorted(set(updated)))}).\n{how}\n\n"
+        "Публикация продолжится сама в ближайшую минуту — перезапускать ничего "
+        "не нужно."
+    )
 
 
 async def _accept_vk_token(

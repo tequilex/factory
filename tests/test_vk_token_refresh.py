@@ -11,6 +11,7 @@ import os
 import stat
 from dataclasses import dataclass, field
 
+import httpx
 import pytest
 
 from factory.core import alerts, secrets
@@ -569,3 +570,134 @@ class TestTheLinkAgreesWithTheDocs:
         )
 
         assert alerts.vk_token_url(54733282) in runbook
+
+
+class TestExchangingACodeForAKey:
+    """Ключ выписывает себе система, а не владелец в браузере.
+
+    ВК привязывает ключ к тому, кто его получил. Владелец, открывший ссылку из
+    отпуска или под VPN, получал ключ на чужой адрес — и система отвечала
+    «access_token was given to another ip address», что выглядело как «ключ
+    сразу протух». Код же ни к чему не привязан.
+    """
+
+    def exchange_with(self, monkeypatch, handler):
+        import httpx
+
+        from factory.core import vk_auth
+
+        transport = httpx.MockTransport(handler)
+        monkeypatch.setattr(
+            "factory.core.http.client_for",
+            lambda *a, **kw: httpx.Client(transport=transport),
+        )
+        return vk_auth
+
+    def test_a_code_becomes_a_key(self, monkeypatch):
+        vk_auth = self.exchange_with(
+            monkeypatch,
+            lambda r: httpx.Response(
+                200, json={"access_token": "vk1.a.свежий", "expires_in": 86400}
+            ),
+        )
+
+        token = vk_auth.exchange("45e7ee12ceed45bd", app_id=1, secret="s")
+
+        assert token == "vk1.a.свежий"
+
+    def test_the_exchange_goes_direct_not_through_the_telegram_proxy(self, monkeypatch):
+        """Ключ обязан привязаться к адресу, с которого система ходит в ВК.
+
+        Пусти обмен через заграничный прокси — и получится ровно та беда, от
+        которой уходим: ключ выписан не туда.
+        """
+        from factory.core import vk_auth
+
+        seen = []
+        monkeypatch.setattr(
+            "factory.core.http.client_for",
+            lambda provider, **kw: seen.append(provider) or _ok_client(),
+        )
+
+        vk_auth.exchange("45e7ee12ceed45bd", app_id=1, secret="s")
+
+        assert seen == ["vk"], "обмен пошёл не как обращение к ВК"
+
+    def test_a_used_code_says_to_get_a_new_one(self, monkeypatch):
+        from factory.core.errors import ProviderError
+
+        vk_auth = self.exchange_with(
+            monkeypatch,
+            lambda r: httpx.Response(
+                200, json={"error": "invalid_grant", "error_description": "code is invalid"}
+            ),
+        )
+
+        with pytest.raises(ProviderError) as excinfo:
+            vk_auth.exchange("45e7ee12ceed45bd", app_id=1, secret="s")
+
+        assert "одноразовый" in str(excinfo.value)
+
+    def test_a_wrong_secret_points_at_the_config(self, monkeypatch):
+        from factory.core.errors import ProviderError
+
+        vk_auth = self.exchange_with(
+            monkeypatch,
+            lambda r: httpx.Response(200, json={"error": "invalid_client"}),
+        )
+
+        with pytest.raises(ProviderError) as excinfo:
+            vk_auth.exchange("45e7ee12ceed45bd", app_id=1, secret="плохой")
+
+        assert "dev.vk.com" in str(excinfo.value)
+
+
+class TestExtractCode:
+    def test_a_whole_redirect_url(self):
+        from factory.core.vk_auth import extract_code
+
+        assert extract_code(
+            "https://oauth.vk.com/blank.html?code=45e7ee12ceed45bd59"
+        ) == "45e7ee12ceed45bd59"
+
+    def test_a_bare_code(self):
+        from factory.core.vk_auth import extract_code
+
+        assert extract_code("45e7ee12ceed45bd59") == "45e7ee12ceed45bd59"
+
+    def test_a_truncated_code_is_refused(self):
+        """Обрезанный при копировании код лучше отвергнуть, чем обменивать.
+
+        Обмен одноразовый: потратив попытку на огрызок, владелец получит
+        «код уже использован» на следующем, настоящем.
+        """
+        from factory.core.vk_auth import extract_code
+
+        assert extract_code("45e7ee12") is None
+        assert extract_code("45e7ee12ceed45bd") is not None
+
+    @pytest.mark.parametrize("text", ["привет", "", "code=коротко", "vk1.a.этоключ"])
+    def test_anything_else_is_refused(self, text):
+        """Ключ не должен приниматься за код: схемы разные."""
+        from factory.core.vk_auth import extract_code
+
+        assert extract_code(text) is None
+
+    def test_the_link_asks_for_a_code_not_a_key(self):
+        """Просить готовый ключ — значит вернуться к привязке по адресу."""
+        from factory.core.vk_auth import authorize_url
+
+        link = authorize_url(54733282)
+
+        assert "response_type=code" in link
+        assert "response_type=token" not in link
+
+
+def _ok_client():
+    import httpx
+
+    return httpx.Client(
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"access_token": "vk1.a.x", "expires_in": 1})
+        )
+    )

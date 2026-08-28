@@ -1,0 +1,34 @@
+{
+  "module": "factory/core/vk_auth.py",
+  "tests": ["tests/test_vk_token_refresh.py"],
+  "mutations": {
+    "просить готовый ключ вместо кода": [
+      "\"&scope=photos&response_type=code&v=5.199\"",
+      "\"&scope=photos&response_type=token&v=5.199\""
+    ],
+    "менять код через прокси Telegram": [
+      "    with http.client_for(\"vk\", proxy_env=proxy_env) as client:",
+      "    with http.client_for(\"telegram\", proxy_env=proxy_env) as client:"
+    ],
+    "принимать за код что угодно": [
+      "    return candidate if re.fullmatch(r\"[0-9a-f]{16,}\", candidate) else None",
+      "    return candidate"
+    ],
+    "принимать обрезанный код": [
+      "re.fullmatch(r\"[0-9a-f]{16,}\", candidate)",
+      "re.fullmatch(r\"[0-9a-f]+\", candidate)"
+    ],
+    "молча возвращать пустой ключ при отказе": [
+      "    raise ProviderError(\n        \"ВКонтакте отказался обменять код на ключ.\",",
+      "    return \"\"\n    raise ProviderError(\n        \"ВКонтакте отказался обменять код на ключ.\","
+    ],
+    "не объяснять одноразовость кода": [
+      "    if error == \"invalid_grant\":",
+      "    if False:"
+    ],
+    "не указывать, где взять защищённый ключ": [
+      "    if error == \"invalid_client\":",
+      "    if False:"
+    ]
+  }
+}

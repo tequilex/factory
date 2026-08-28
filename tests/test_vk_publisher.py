@@ -450,6 +450,45 @@ class TestExpiredTokenIsRecognised:
 
         assert excinfo.value.token_expired is True
 
+    def test_a_key_from_another_address_is_told_apart(self, images, monkeypatch):
+        """У ВК это тот же код ошибки, но причина и лечение разные.
+
+        «Истёк» про ключ, полученный минуту назад, отправляет владельца
+        получать такой же — и он снова не сработает.
+        """
+        recorder = Recorder(
+            {
+                "photos.getWallUploadServer": httpx.Response(
+                    200,
+                    json={
+                        "error": {
+                            "error_code": 5,
+                            "error_subcode": 1130,
+                            "error_msg": "access_token was given to another ip address",
+                        }
+                    },
+                )
+            }
+        )
+        vk = publisher(recorder, monkeypatch, upload_token_env="VK_UPLOAD_TOKEN")
+
+        with pytest.raises(VkError) as excinfo:
+            vk.publish(Post(), images)
+
+        assert excinfo.value.wrong_address is True
+        assert "другой адрес" in str(excinfo.value)
+        assert "24 часа" not in str(excinfo.value), "сказали про срок, а дело не в нём"
+
+    def test_a_plainly_expired_key_is_not_blamed_on_the_address(self, images, monkeypatch):
+        recorder = Recorder({"photos.getWallUploadServer": error(5, "token expired")})
+        vk = publisher(recorder, monkeypatch, upload_token_env="VK_UPLOAD_TOKEN")
+
+        with pytest.raises(VkError) as excinfo:
+            vk.publish(Post(), images)
+
+        assert excinfo.value.wrong_address is False
+        assert "24 часа" in str(excinfo.value)
+
     def test_other_failures_are_not_expired_keys(self, images, monkeypatch):
         """Иначе владельца будили бы ключом по любому отказу ВК."""
         recorder = Recorder({"photos.getWallUploadServer": error(27, "group auth")})

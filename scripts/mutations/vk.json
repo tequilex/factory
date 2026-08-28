@@ -1,6 +1,6 @@
 {
   "module": "factory/providers/publishers/vk.py",
-  "tests": "tests/test_vk_publisher.py",
+  "tests": "tests/test_vk_publisher.py tests/test_vk_token_refresh.py",
   "mutations": {
     "вернуть ретраи на публикации": [
       "            response = self._call(client, \"wall.post\", self.token, **params)",
@@ -89,6 +89,18 @@
     "перепутать ключи местами в сообщении": [
       "        if token == self.upload_token:\n            return self.upload_token_env",
       "        if token == self.upload_token:\n            return self.token_env"
+    ],
+    "не отличать чужой адрес от истёкшего срока": [
+      "    if code == TOKEN_EXPIRED and subcode == WRONG_ADDRESS:",
+      "    if False:"
+    ],
+    "считать любой отказ ключа чужим адресом": [
+      "    if code == TOKEN_EXPIRED and subcode == WRONG_ADDRESS:",
+      "    if code == TOKEN_EXPIRED:"
+    ],
+    "терять подкод ошибки": [
+      "                subcode=int(error[\"error_subcode\"]) if \"error_subcode\" in error else None,",
+      "                subcode=None,"
     ]
   }
 }

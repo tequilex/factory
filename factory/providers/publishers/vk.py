@@ -49,6 +49,10 @@ log = get_logger(__name__)
 
 #: Код ВК для протухшего или отозванного ключа.
 TOKEN_EXPIRED = 5
+#: Подкод: ключ действителен, но выписан на другой адрес. Причина и лечение
+#: другие, чем у истёкшего, а код ошибки тот же — без различения владелец
+#: получает «ключ истёк» про ключ, полученный минуту назад.
+WRONG_ADDRESS = 1130
 
 
 class VkError(ProviderError):
@@ -61,23 +65,43 @@ class VkError(ProviderError):
     """
 
     def __init__(
-        self, code: int, message: str, *, method: str, token_env: str | None = None
+        self,
+        code: int,
+        message: str,
+        *,
+        method: str,
+        token_env: str | None = None,
+        subcode: int | None = None,
     ) -> None:
         self.code = code
+        self.subcode = subcode
         self.token_env = token_env
         super().__init__(
             f"ВКонтакте отказал в вызове {method}: ошибка {code}.",
             why=message,
-            what_to_do=_advice(code, method, token_env),
+            what_to_do=_advice(code, method, token_env, subcode),
         )
 
     @property
     def token_expired(self) -> bool:
         return self.code == TOKEN_EXPIRED
 
+    @property
+    def wrong_address(self) -> bool:
+        """Ключ выписан на другой адрес, а не истёк."""
+        return self.code == TOKEN_EXPIRED and self.subcode == WRONG_ADDRESS
 
-def _advice(code: int, method: str, token_env: str | None = None) -> str:
+
+def _advice(
+    code: int, method: str, token_env: str | None = None, subcode: int | None = None
+) -> str:
     """Каждая частая ошибка ВК — с инструкцией, а не с кодом наедине."""
+    if code == TOKEN_EXPIRED and subcode == WRONG_ADDRESS:
+        return (
+            "Ключ выписан на другой адрес: ВК привязывает его к тому, кто "
+            "получил. Похоже, ссылку открыли под VPN или с другого устройства. "
+            "Получи ключ заново — бот пришлёт ссылку и подставит его сам."
+        )
     if code == TOKEN_EXPIRED:
         which = f" ({token_env})" if token_env else ""
         return (
@@ -185,6 +209,7 @@ class VkPublisher:
                 str(error.get("error_msg", "")),
                 method=method,
                 token_env=self._env_of(token),
+                subcode=int(error["error_subcode"]) if "error_subcode" in error else None,
             )
         return payload["response"]
 
