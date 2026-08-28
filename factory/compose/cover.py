@@ -250,26 +250,39 @@ def render(background: bytes, title: str, template_path: Path) -> bytes:
             outline=frame_colour,
         )
 
+    prepared = prepare(title, spec)
+    padding = plate["padding"]
+    plate_height = int(plate["height"])
+    lines: list[str] = []
+    font = None
+    block_height = 0
+
+    if prepared.strip():
+        spacing = title_spec.get("line_spacing", 1.05)
+        font = load_font(fit_font_size(title, spec), title_spec.get("font", DEFAULT_FONT))
+        lines = wrap(prepared, font, plate["width"] - 2 * padding)
+        _, block_height = _block_size(lines, font, spacing)
+
+        # Плашка по тексту, а не по худшему случаю. Без этого короткий заголовок
+        # получает тот же белый блок, что и длинный, — и закрывает картинку
+        # просто так. Высота из шаблона остаётся потолком: заголовок в четыре
+        # строки не имеет права съесть половину обложки.
+        if plate.get("fit_to_text"):
+            plate_height = min(plate_height, block_height + 2 * padding)
+
     draw.rectangle(
-        [plate["x"], plate["y"], plate["x"] + plate["width"], plate["y"] + plate["height"]],
+        [plate["x"], plate["y"], plate["x"] + plate["width"], plate["y"] + plate_height],
         fill=parse_colour(plate["color"]),
     )
 
-    prepared = prepare(title, spec)
-    if prepared.strip():
-        padding = plate["padding"]
-        available_width = plate["width"] - 2 * padding
+    if lines and font is not None:
         spacing = title_spec.get("line_spacing", 1.05)
         align = title_spec.get("align", "center")
-
-        font = load_font(fit_font_size(title, spec), title_spec.get("font", DEFAULT_FONT))
-        lines = wrap(prepared, font, available_width)
         line_height = font.getbbox("ЁДg")[3]
-        _, block_height = _block_size(lines, font, spacing)
 
         y = plate["y"] + padding
         if title_spec.get("valign", "center") == "center":
-            y = plate["y"] + (plate["height"] - block_height) // 2
+            y = plate["y"] + (plate_height - block_height) // 2
 
         base_colour = parse_colour(title_spec["color"])
         accent = title_spec.get("accent_color")

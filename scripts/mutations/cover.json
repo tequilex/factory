@@ -27,7 +27,7 @@
       "    for offset in range(1):"
     ],
     "не рисовать плашку": [
-      "    draw.rectangle(\n        [plate[\"x\"], plate[\"y\"], plate[\"x\"] + plate[\"width\"], plate[\"y\"] + plate[\"height\"]],\n        fill=parse_colour(plate[\"color\"]),\n    )",
+      "    draw.rectangle(\n        [plate[\"x\"], plate[\"y\"], plate[\"x\"] + plate[\"width\"], plate[\"y\"] + plate_height],\n        fill=parse_colour(plate[\"color\"]),\n    )",
       "    pass"
     ],
     "не рисовать заголовок": [
@@ -77,6 +77,22 @@
     "молча подставлять шрифт по умолчанию вместо ошибки": [
       "    if not path.is_file():",
       "    if False:"
+    ],
+    "не сжимать плашку по тексту": [
+      "        if plate.get(\"fit_to_text\"):\n            plate_height = min(plate_height, block_height + 2 * padding)",
+      "        pass"
+    ],
+    "сжимать плашку всегда, игнорируя настройку": [
+      "        if plate.get(\"fit_to_text\"):\n            plate_height = min(plate_height, block_height + 2 * padding)",
+      "        plate_height = min(plate_height, block_height + 2 * padding)"
+    ],
+    "снять потолок высоты плашки": [
+      "            plate_height = min(plate_height, block_height + 2 * padding)",
+      "            plate_height = block_height + 2 * padding"
+    ],
+    "центрировать текст по старой высоте плашки": [
+      "            y = plate[\"y\"] + (plate_height - block_height) // 2",
+      "            y = plate[\"y\"] + (int(plate[\"height\"]) - block_height) // 2"
     ]
   }
 }

@@ -12,12 +12,13 @@
     "width_px": 22
   },
 
-  "_plate_comment": "Плашка во всю ширину между рамками, прижата к верху.",
+  "_plate_comment": "Плашка во всю ширину между рамками, прижата к верху. height — это ПОТОЛОК: при fit_to_text плашка сжимается по тексту, и короткий заголовок не закрывает картинку зря.",
   "plate": {
     "x": 22,
     "y": 22,
     "width": 1036,
     "height": 340,
+    "fit_to_text": true,
     "color": "#FFFFFF",
     "padding": 24
   },
@@ -31,7 +32,7 @@
     "align": "center",
     "valign": "center",
     "size_min": 40,
-    "size_max": 130,
+    "size_max": 78,
     "line_spacing": 1.04
   }
 }

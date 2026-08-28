@@ -36,6 +36,19 @@ def build(template, background, title=LONG_TITLE) -> Image.Image:
     return Image.open(io.BytesIO(cover.render(background, title, template)))
 
 
+def roomy(template) -> dict:
+    """Шаблон с заведомо большим потолком кегля.
+
+    Боевой шаблон держит `size_max` небольшим — иначе заголовок закрывает
+    картинку. Но тогда и длинный заголовок влезает в максимум, и подбору кегля
+    нечего подбирать. Проверять сам подбор надо там, где он работает, иначе
+    тест зелен потому, что ничего не проверяет.
+    """
+    spec = json.loads(template.read_text(encoding="utf-8"))
+    spec["title"]["size_max"] = 130
+    return spec
+
+
 class TestOutput:
     def test_result_is_a_png_of_the_right_size(self, template, background):
         image = build(template, background)
@@ -78,6 +91,21 @@ class TestFrame:
         assert image.getpixel((thickness + 4, 700))[:3] != colour
 
 
+def plate_bottom(image: Image.Image, spec: dict) -> int:
+    """Нижняя граница плашки на готовой обложке, по цвету пикселей.
+
+    Меряется по картинке, а не по числу из шаблона: проверяется именно то, что
+    закрывает фотографию, а не то, что было задумано.
+    """
+    colour = cover.parse_colour(spec["plate"]["color"])
+    x = spec["plate"]["x"] + 4
+    last = spec["plate"]["y"]
+    for y in range(spec["plate"]["y"], spec["canvas"]["height"]):
+        if image.getpixel((x, y))[:3] == colour:
+            last = y
+    return last
+
+
 class TestPlate:
     def test_plate_is_filled_with_its_colour(self, template, background):
         spec = json.loads(template.read_text(encoding="utf-8"))
@@ -86,6 +114,70 @@ class TestPlate:
 
         corner = (plate["x"] + 4, plate["y"] + 4)
         assert image.getpixel(corner)[:3] == cover.parse_colour(plate["color"])
+
+    def test_plate_shrinks_to_a_short_title(self, template, background):
+        """Плашка по тексту, а не по худшему случаю.
+
+        Иначе заголовок в два слова закрывает белым ту же четверть картинки, что
+        и заголовок в две строки, — просто так.
+        """
+        spec = json.loads(template.read_text(encoding="utf-8"))
+
+        short = plate_bottom(build(template, background, SHORT_TITLE), spec)
+        long = plate_bottom(build(template, background, LONG_TITLE), spec)
+
+        assert short < long
+
+    def test_plate_never_grows_past_the_template_height(self, template, background):
+        """Высота из шаблона остаётся потолком.
+
+        Проверяется на шаблоне, где кегль ужаться не может (`size_min` равен
+        `size_max`): иначе подбор всегда впишет текст в плашку сам, потолок
+        никогда не сработает, и тест будет зелёным, ничего не проверяя.
+        """
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec["title"]["size_min"] = spec["title"]["size_max"]
+        rigid = template.parent / "rigid.json"
+        rigid.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+        image = build(rigid, background, LONG_TITLE * 2)
+
+        assert plate_bottom(image, spec) <= spec["plate"]["y"] + spec["plate"]["height"]
+
+    def test_padding_is_respected_when_choosing_the_size(self, template):
+        """Отступы плашки — часть доступного места, а не украшение.
+
+        Без них подбор считает, что текст можно вести впритык к белому краю, и
+        заголовок в бою упирается в границу плашки.
+        """
+        spec = roomy(template)
+        tight = json.loads(json.dumps(spec))
+        tight["plate"]["padding"] = 140
+
+        assert cover.fit_font_size(LONG_TITLE, tight) < cover.fit_font_size(LONG_TITLE, spec)
+
+    def test_without_fit_to_text_the_plate_keeps_its_height(self, template, background):
+        """Старое поведение остаётся доступным: это настройка, а не смена правил."""
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec["plate"]["fit_to_text"] = False
+        fixed = template.parent / "fixed.json"
+        fixed.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+        short = plate_bottom(build(fixed, background, SHORT_TITLE), spec)
+        long = plate_bottom(build(fixed, background, LONG_TITLE), spec)
+
+        assert short == long
+
+    def test_title_stays_centred_in_the_shrunken_plate(self, template, background):
+        """Текст обязан ехать вместе с плашкой, иначе он вылезет за её край."""
+        spec = json.loads(template.read_text(encoding="utf-8"))
+        image = build(template, background, SHORT_TITLE)
+
+        box = cover.text_bounds(image, cover.title_colours(spec))
+        bottom_of_plate = plate_bottom(image, spec)
+
+        assert box is not None
+        assert box[3] <= bottom_of_plate
 
 
 class TestTitle:
@@ -107,7 +199,7 @@ class TestTitle:
 
     def test_short_title_is_set_larger_than_a_long_one(self, template, background):
         """Автоподбор кегля: короткий заголовок должен занимать плашку крупнее."""
-        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec = roomy(template)
 
         short = cover.fit_font_size(SHORT_TITLE, spec)
         long = cover.fit_font_size(LONG_TITLE, spec)
@@ -121,7 +213,7 @@ class TestTitle:
         функция сваливается на минимальный кегль, тесты остаются зелёными, а
         заголовки в бою рисуются мелкими.
         """
-        spec = json.loads(template.read_text(encoding="utf-8"))
+        spec = roomy(template)
         plate = spec["plate"]
         padding = plate["padding"]
         available_width = plate["width"] - 2 * padding
