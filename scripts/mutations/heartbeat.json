@@ -1,0 +1,18 @@
+{
+  "module": "factory/core/paths.py",
+  "tests": [
+    "tests/test_lock.py",
+    "tests/test_paths.py",
+    "tests/test_alerts.py"
+  ],
+  "mutations": {
+    "вернуть двухчасовой порог из первой редакции спеки": [
+      "    return _env_int(\"FACTORY_HEARTBEAT_STALE_SEC\", 600)",
+      "    return _env_int(\"FACTORY_HEARTBEAT_STALE_SEC\", 7200)"
+    ],
+    "не давать менять порог из окружения": [
+      "    return _env_int(\"FACTORY_HEARTBEAT_STALE_SEC\", 600)",
+      "    return 600"
+    ]
+  }
+}

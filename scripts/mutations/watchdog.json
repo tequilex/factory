@@ -1,0 +1,30 @@
+{
+  "module": "factory/bot/review_bot.py",
+  "tests": ["tests/test_alerts.py"],
+  "mutations": {
+    "молчать о вставшем воркере": [
+      "        if silent:\n            alerts.raise_once(",
+      "        if False:\n            alerts.raise_once("
+    ],
+    "жаловаться на живой воркер": [
+      "    silent = lock.heartbeat_is_stale(conn)",
+      "    silent = True"
+    ],
+    "не снимать тревогу, когда воркер вернулся": [
+      "            alerts.clear(conn, \"worker_silent\", slug)",
+      "            pass"
+    ],
+    "молча гасить тревогу, не сказав владельцу": [
+      "                notifier.alert(\n                    chat_id=project.telegram.chat_id, text=alerts.worker_back_text()\n                )",
+      "                pass"
+    ],
+    "не говорить, сколько он молчит": [
+      "    minutes = int((lock.heartbeat_age_sec(conn) or 0) // 60)",
+      "    minutes = 0"
+    ],
+    "тревожить проекты без telegram": [
+      "        if project.telegram is None:\n            continue",
+      "        if False:\n            continue"
+    ]
+  }
+}

@@ -135,6 +135,17 @@ def tick_interval_sec() -> int:
     return _env_int("FACTORY_TICK_INTERVAL_SEC", DEFAULT_TICK_INTERVAL_SEC)
 
 
+def heartbeat_stale_sec() -> int:
+    """Через сколько молчания воркера считать, что он встал.
+
+    SPEC.md называл два часа. При тике раз в минуту это 120 пропущенных
+    проходов, прежде чем владелец узнает — а узнаёт он обычно так: нажимает
+    кнопку и не получает результата. Десять минут молчания однозначно означают
+    поломку и не дают ложных тревог.
+    """
+    return _env_int("FACTORY_HEARTBEAT_STALE_SEC", 600)
+
+
 def lock_ttl_sec() -> int:
     return _env_int("FACTORY_LOCK_TTL_SEC", DEFAULT_LOCK_TTL_SEC)
 

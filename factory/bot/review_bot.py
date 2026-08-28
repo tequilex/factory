@@ -948,6 +948,64 @@ def _status_text(
     return "\n\n".join(lines)
 
 
+#: Как часто бот проверяет, жив ли воркер. Чаще незачем: порог измеряется
+#: минутами, а лишние проверки — лишние записи в лог.
+WATCH_EVERY_SEC = 60
+
+
+def check_worker(conn: sqlite3.Connection, projects: dict[str, ProjectConfig]) -> None:
+    """Сказать владельцу, если воркер перестал отвечать.
+
+    Следит именно бот: воркер, который встал, не может пожаловаться на себя
+    сам. Это самая обидная поломка из всех — кнопки работают, подтверждения
+    приходят, а выполнять решения некому, и снаружи одно от другого неотличимо.
+    """
+    from factory.core import lock
+    from factory.providers.registry import build_providers
+
+    silent = lock.heartbeat_is_stale(conn)
+    minutes = int((lock.heartbeat_age_sec(conn) or 0) // 60)
+
+    for slug, project in projects.items():
+        if project.telegram is None:
+            continue
+        try:
+            notifier = build_providers(project).notifier
+        except FactoryError as exc:
+            log.warning("нет чем уведомить", extra={"slug": slug, "reason": str(exc)})
+            continue
+
+        if silent:
+            alerts.raise_once(
+                conn, notifier, chat_id=project.telegram.chat_id,
+                name="worker_silent", scope=slug,
+                text=alerts.worker_silent_text(minutes),
+            )
+        elif alerts.is_raised(conn, "worker_silent", slug):
+            # Тревога снимается там, где видно, что причина исчезла, и владелец
+            # узнаёт об этом: молча погашенная тревога оставляет его в
+            # уверенности, что всё ещё сломано.
+            alerts.clear(conn, "worker_silent", slug)
+            try:
+                notifier.alert(
+                    chat_id=project.telegram.chat_id, text=alerts.worker_back_text()
+                )
+            except Exception as exc:  # noqa: BLE001 — уведомление не работа
+                log.info("не удалось сообщить о возврате", extra={"reason": str(exc)})
+
+
+async def _watch_worker(conn: sqlite3.Connection) -> None:
+    """Фоновая проверка. Живёт столько же, сколько бот."""
+    import asyncio as _asyncio
+
+    while True:
+        await _asyncio.sleep(WATCH_EVERY_SEC)
+        try:
+            check_worker(conn, _projects())
+        except Exception:  # noqa: BLE001 — наблюдатель не имеет права ронять бота
+            log.exception("проверка воркера сорвалась")
+
+
 def run() -> None:
     """Запустить бота длинным опросом. Блокирует процесс."""
     projects = _projects()
@@ -989,7 +1047,7 @@ def run() -> None:
     dispatcher = build_dispatcher(conn)
 
     log.info("бот запущен", extra={"projects": sorted(projects)})
-    asyncio.run(_poll(token, dispatcher))
+    asyncio.run(_poll(token, dispatcher, conn))
 
 
 async def _publish_menu(bot: Bot) -> None:
@@ -1009,8 +1067,9 @@ async def _publish_menu(bot: Bot) -> None:
         log.warning("не удалось обновить меню команд", extra={"reason": str(exc)})
 
 
-async def _poll(token: str, dispatcher: Dispatcher) -> None:
+async def _poll(token: str, dispatcher: Dispatcher, conn: sqlite3.Connection) -> None:
     bot = Bot(token=token)
+    watcher = asyncio.create_task(_watch_worker(conn))
     try:
         # Накопившиеся за простой нажатия НЕ сбрасываем. Нажал владелец
         # «Опубликовать», пока бот лежал, — пост должен уйти, а не пропасть
@@ -1022,4 +1081,5 @@ async def _poll(token: str, dispatcher: Dispatcher) -> None:
         await _publish_menu(bot)
         await dispatcher.start_polling(bot)
     finally:
+        watcher.cancel()
         await bot.session.close()

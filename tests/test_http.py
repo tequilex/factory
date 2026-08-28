@@ -156,3 +156,32 @@ def test_no_module_creates_httpx_clients_directly():
     assert not offenders, (
         "клиенты httpx создаются в обход core/http.py: " + ", ".join(offenders)
     )
+
+
+class TestSocksProxies:
+    """SOCKS нужен, потому что дешёвые прокси почти всегда именно такие.
+
+    Без пакета socksio httpx падает на создании клиента с socks5://, и падает
+    не при настройке, а в бою — на первом же запросе к Telegram.
+    """
+
+    def test_a_socks_proxy_can_be_used(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_PROXY", "socks5://127.0.0.1:1080")
+
+        with http.client_for("telegram") as client:
+            assert client is not None
+
+    def test_an_http_proxy_still_works(self, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_PROXY", "http://127.0.0.1:3128")
+
+        with http.client_for("telegram") as client:
+            assert client is not None
+
+    def test_each_provider_keeps_its_own_route(self, monkeypatch):
+        """Главное свойство: ВК идёт напрямую, когда Telegram идёт через прокси."""
+        monkeypatch.setenv("TELEGRAM_PROXY", "socks5://127.0.0.1:1080")
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.delenv("VK_PROXY", raising=False)
+
+        assert http.proxy_for("telegram") == "socks5://127.0.0.1:1080"
+        assert http.proxy_for("vk") is None

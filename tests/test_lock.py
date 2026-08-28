@@ -11,7 +11,7 @@ from datetime import timedelta
 
 import pytest
 
-from factory.core import db, lock
+from factory.core import db, lock, paths
 from factory.core.clock import from_iso, now_utc, to_iso
 from factory.core.errors import LockError
 
@@ -245,25 +245,46 @@ class TestHeartbeat:
         age = lock.heartbeat_age_sec(conn)
         assert 3 * 3600 - 5 < age < 3 * 3600 + 5
 
-    def test_just_under_two_hours_is_not_yet_stale(self, conn):
-        """Парный к тесту ниже: только пара 1:59 / 2:01 фиксирует сам порог.
+    def test_just_under_the_threshold_is_not_yet_stale(self, conn):
+        """Парный к тесту ниже: только пара 9:59 / 10:01 фиксирует сам порог.
 
-        По отдельности каждый из них проходит при любом пороге от нуля до двух
-        часов, то есть не проверяет ничего.
+        По отдельности каждый из них проходит при любом пороге от нуля до
+        десяти минут, то есть не проверяет ничего.
         """
         with db.write_transaction(conn):
             conn.execute(
                 "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
-                (to_iso(now_utc() - timedelta(hours=1, minutes=59)), to_iso(now_utc())),
+                (to_iso(now_utc() - timedelta(minutes=9, seconds=59)), to_iso(now_utc())),
             )
 
         assert lock.heartbeat_is_stale(conn) is False
 
-    def test_is_stale_uses_the_two_hour_threshold_from_the_spec(self, conn):
+    def test_past_the_threshold_it_is_stale(self, conn):
         with db.write_transaction(conn):
             conn.execute(
                 "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
-                (to_iso(now_utc() - timedelta(hours=2, minutes=1)), to_iso(now_utc())),
+                (to_iso(now_utc() - timedelta(minutes=10, seconds=1)), to_iso(now_utc())),
+            )
+
+        assert lock.heartbeat_is_stale(conn) is True
+
+    def test_the_default_is_ten_minutes(self):
+        """Число литералом: сверять константу с самой собой — не проверка.
+
+        Десять минут — это десять пропущенных тиков при обычной минутной
+        частоте. Двухчасовой порог из первой редакции спеки означал сто
+        двадцать, и владелец узнавал о вставшем воркере раньше и хуже: нажимал
+        кнопку и не получал результата.
+        """
+        assert paths.heartbeat_stale_sec() == 600
+
+    def test_the_threshold_can_be_changed_from_the_environment(self, monkeypatch, conn):
+        """На малине тик реже, а на отладке чаще — порог обязан подстраиваться."""
+        monkeypatch.setenv("FACTORY_HEARTBEAT_STALE_SEC", "60")
+        with db.write_transaction(conn):
+            conn.execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(minutes=2)), to_iso(now_utc())),
             )
 
         assert lock.heartbeat_is_stale(conn) is True

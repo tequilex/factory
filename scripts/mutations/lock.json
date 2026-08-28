@@ -6,10 +6,6 @@
       "        if _is_ours(payload):\n            conn.execute(\"DELETE FROM meta WHERE key = ?\", (LOCK_KEY,))",
       "        conn.execute(\"DELETE FROM meta WHERE key = ?\", (LOCK_KEY,))\n        if False:\n            pass"
     ],
-    "изменить порог протухания хартбита": [
-      "HEARTBEAT_STALE_AFTER_SEC = 2 * 3600",
-      "HEARTBEAT_STALE_AFTER_SEC = 600"
-    ],
     "вернуть гонку: не проверять владельца при продлении": [
       "        if not _is_ours(payload):",
       "        if False and not _is_ours(payload):"
@@ -34,9 +30,13 @@
       "    row = conn.execute(\"SELECT value FROM meta WHERE key = ?\", (HEARTBEAT_KEY,)).fetchone()",
       "    row = conn.execute(\"SELECT updated_at AS value FROM meta WHERE key = ?\", (HEARTBEAT_KEY,)).fetchone()"
     ],
-    "считать отсутствие хартбита нормой": [
-      "    return age is None or age > HEARTBEAT_STALE_AFTER_SEC",
-      "    return age is not None and age > HEARTBEAT_STALE_AFTER_SEC"
+    "считать живым ни разу не отработавший воркер": [
+      "    return age is None or age > paths.heartbeat_stale_sec()",
+      "    return age is not None and age > paths.heartbeat_stale_sec()"
+    ],
+    "игнорировать порог молчания": [
+      "    return age is None or age > paths.heartbeat_stale_sec()",
+      "    return age is None"
     ]
   }
 }

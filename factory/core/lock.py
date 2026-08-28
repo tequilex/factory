@@ -28,8 +28,9 @@ from factory.core.logging import get_logger
 LOCK_KEY = "tick_lock"
 HEARTBEAT_KEY = "heartbeat"
 
-# SPEC.md, «Эксплуатация»: если тик не отработал успешно два часа — будить владельца.
-HEARTBEAT_STALE_AFTER_SEC = 2 * 3600
+# Порог берётся из окружения: см. paths.heartbeat_stale_sec. Значение SPEC.md
+# в два часа оказалось слишком щедрым — владелец узнавал о вставшем воркере
+# раньше и хуже: нажимал кнопку и не получал результата.
 
 log = get_logger(__name__)
 
@@ -240,4 +241,4 @@ def heartbeat_is_stale(conn: sqlite3.Connection) -> bool:
     that stopped two hours ago, and just as worth reporting.
     """
     age = heartbeat_age_sec(conn)
-    return age is None or age > HEARTBEAT_STALE_AFTER_SEC
+    return age is None or age > paths.heartbeat_stale_sec()

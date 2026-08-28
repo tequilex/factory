@@ -5,6 +5,8 @@
 приучает не читать тревоги вообще, и тогда настоящую поломку никто не заметит.
 """
 
+from datetime import timedelta
+
 import pytest
 
 from factory.core import alerts, db, machine
@@ -449,3 +451,117 @@ class TestExpiredKeyIsWaitingNotFailure:
         )
 
         assert machine.reload_post(watched["conn"], watched["post_id"]).retry_count == 1
+
+
+class TestTheBotWatchesTheWorker:
+    """Самая обидная поломка: кнопки работают, а выполнять решения некому.
+
+    Владелец нажимает, получает подтверждение и ничего не дожидается. Снаружи
+    живой бот и мёртвый воркер неразличимы — за сегодня это случилось трижды,
+    и каждый раз выглядело как «система сломалась молча».
+    """
+
+    @pytest.fixture
+    def watched_bot(self, watched, monkeypatch):
+        from factory.bot import review_bot
+
+        monkeypatch.setattr(
+            "factory.providers.registry.build_providers",
+            lambda config: watched["providers"],
+        )
+        watched["check"] = lambda: review_bot.check_worker(
+            watched["conn"], {"demo": watched["watched_project"]}
+        )
+        return watched
+
+    def test_a_silent_worker_is_reported(self, watched_bot):
+        from factory.core import lock
+
+        with db.write_transaction(watched_bot["conn"]):
+            watched_bot["conn"].execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(minutes=30)), to_iso(now_utc())),
+            )
+        assert lock.heartbeat_is_stale(watched_bot["conn"])
+
+        watched_bot["check"]()
+
+        (message,) = watched_bot["providers"].notifier.alerts
+        assert "молчит" in message
+        assert "30 мин" in message
+
+    def test_a_working_worker_says_nothing(self, watched_bot):
+        from factory.core import lock
+
+        lock.write_heartbeat(watched_bot["conn"])
+
+        watched_bot["check"]()
+
+        assert watched_bot["providers"].notifier.alerts == []
+
+    def test_it_does_not_repeat_every_minute(self, watched_bot):
+        """Проверка идёт раз в минуту — повтор превратил бы её в поток."""
+        with db.write_transaction(watched_bot["conn"]):
+            watched_bot["conn"].execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(hours=1)), to_iso(now_utc())),
+            )
+        watched_bot["check"]()
+
+        watched_bot["check"]()
+
+        assert len(watched_bot["providers"].notifier.alerts) == 1
+
+    def test_the_owner_is_told_when_it_comes_back(self, watched_bot):
+        """Молча погашенная тревога оставляет владельца в уверенности, что сломано."""
+        from factory.core import lock
+
+        with db.write_transaction(watched_bot["conn"]):
+            watched_bot["conn"].execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?)",
+                (to_iso(now_utc() - timedelta(hours=1)), to_iso(now_utc())),
+            )
+        watched_bot["check"]()
+
+        lock.write_heartbeat(watched_bot["conn"])
+        watched_bot["check"]()
+
+        assert "вернулся" in watched_bot["providers"].notifier.alerts[-1]
+
+    def test_it_can_sound_again_after_recovering(self, watched_bot):
+        from factory.core import lock
+
+        def go_silent():
+            with db.write_transaction(watched_bot["conn"]):
+                watched_bot["conn"].execute(
+                    "INSERT INTO meta (key, value, updated_at) VALUES ('heartbeat', ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (to_iso(now_utc() - timedelta(hours=1)), to_iso(now_utc())),
+                )
+
+        go_silent()
+        watched_bot["check"]()
+        lock.write_heartbeat(watched_bot["conn"])
+        watched_bot["check"]()
+
+        go_silent()
+        watched_bot["check"]()
+
+        assert sum("молчит" in text for text in watched_bot["providers"].notifier.alerts) == 2
+
+    def test_a_system_that_never_ticked_counts_as_silent(self, watched_bot):
+        """Ни разу не отработавший воркер сломан ровно так же, как вставший."""
+        watched_bot["check"]()
+
+        assert any("молчит" in text for text in watched_bot["providers"].notifier.alerts)
+
+    def test_a_project_without_telegram_is_not_bothered(self, watched, monkeypatch):
+        from factory.bot import review_bot
+
+        monkeypatch.setattr(
+            "factory.providers.registry.build_providers", lambda config: watched["providers"]
+        )
+
+        review_bot.check_worker(watched["conn"], {"demo": watched["project"]})
+
+        assert watched["providers"].notifier.alerts == []
