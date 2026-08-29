@@ -1,0 +1,34 @@
+{
+  "module": "factory/panel/api/posts.py",
+  "tests": "tests/test_panel_read.py",
+  "mutations": {
+    "отдавать файл по пути из базы без проверки": [
+        "    if not path.is_relative_to(root) or not path.is_file():\n        raise HTTPException(status_code=404, detail=\"Файл картинки не найден.\")",
+        "    pass"
+    ],
+    "проверять только существование файла": [
+        "    if not path.is_relative_to(root) or not path.is_file():",
+        "    if not path.is_file():"
+    ],
+    "показывать вариант «1 из 0» на свежем посте": [
+        "        versions_total=max(versions.count(conn, post_id), row[\"version\"]),",
+        "        versions_total=versions.count(conn, post_id),"
+    ],
+    "молча отдавать пустую подпись состояния": [
+        "        state_label=deps.label_of(row[\"state\"]),",
+        "        state_label=\"\","
+    ],
+    "потерять обложку из начала списка картинок": [
+        "            \"ORDER BY CASE kind WHEN 'cover' THEN 0 ELSE 1 END, position\",",
+        "            \"ORDER BY position DESC\","
+    ],
+    "не считать стоимость поста": [
+        "        \"SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE post_id = ?\", (post_id,)",
+        "        \"SELECT 0 FROM runs WHERE post_id = ? LIMIT 1\", (post_id,)"
+    ],
+    "игнорировать фильтр по состоянию": [
+        "    if state:\n        where.append(\"o.state = ?\")\n        params.append(state)",
+        "    pass"
+    ]
+  }
+}

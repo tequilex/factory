@@ -1,0 +1,10 @@
+{
+  "module": "factory/panel/app.py",
+  "tests": "tests/test_panel_read.py",
+  "mutations": {
+    "открыть чтение без входа": [
+        "        app.include_router(router, dependencies=[Depends(require_session)])",
+        "        app.include_router(router)"
+    ]
+  }
+}

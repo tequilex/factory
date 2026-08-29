@@ -14,12 +14,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from factory.core.errors import FactoryError
 from factory.core.logging import get_logger
 from factory.panel import auth
+from factory.panel.api import content, overview, posts
 
 log = get_logger(__name__)
 
@@ -90,5 +94,20 @@ def create_app() -> FastAPI:
     def session(_: None = Depends(require_session)) -> dict:
         """Годен ли вход. Нужен фронту, чтобы решить, показывать экран входа."""
         return {"ok": True}
+
+    # Вход навешивается на роутер целиком, а не на каждую ручку отдельно.
+    # Забыть зависимость на одном обработчике — открыть данные наружу, и
+    # заметить это можно будет только тем, что кто-то их прочитал.
+    for router in (overview.router, posts.router, content.router):
+        app.include_router(router, dependencies=[Depends(require_session)])
+
+    # Статика подключается последней: маршруты выше должны разбираться раньше,
+    # иначе «/» перехватит и запросы к данным.
+    #
+    # Вход на неё не вешается намеренно: это оболочка страницы, а данных в ней
+    # нет. Пароль спрашивает она сама, получив 401 от первой же ручки.
+    static = Path(__file__).resolve().parent / "static"
+    if static.is_dir():
+        app.mount("/", StaticFiles(directory=static, html=True), name="static")
 
     return app

@@ -1,0 +1,30 @@
+{
+  "module": "factory/panel/api/content.py",
+  "tests": "tests/test_panel_read.py",
+  "mutations": {
+    "свалить все расходы в одну кучу": [
+        "        if row[\"step\"] == \"queued\":\n            day.text += spent\n        elif row[\"step\"] == \"text_ready\":\n            day.factcheck += spent\n        elif row[\"step\"] == \"prompts_ready\":\n            day.images += spent",
+        "        if False:\n            day.text += spent\n        elif False:\n            day.factcheck += spent\n        elif False:\n            day.images += spent"
+    ],
+    "перепутать картинки с текстом в разбивке": [
+        "        elif row[\"step\"] == \"prompts_ready\":\n            day.images += spent",
+        "        elif row[\"step\"] == \"prompts_ready\":\n            day.text += spent"
+    ],
+    "считать среднюю цену по всем постам подряд": [
+        "        average_post=round(total / counted, 2) if counted else None,",
+        "        average_post=total,"
+    ],
+    "не отличать ошибки от удач в ленте": [
+        "    if only_errors:\n        where.append(\"r.ok = 0\")",
+        "    pass"
+    ],
+    "показывать код шага вместо человеческих слов": [
+        "            step_label=STEP_WORDS.get(row[\"step\"], row[\"step\"]),",
+        "            step_label=row[\"step\"],"
+    ],
+    "молчать о неподключённом проекте": [
+        "        raise HTTPException(status_code=404, detail=f\"Проект «{slug}» не подключён.\")",
+        "        return 0"
+    ]
+  }
+}

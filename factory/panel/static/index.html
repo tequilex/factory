@@ -1,0 +1,205 @@
+<!doctype html>
+<!--
+  Временный экран панели: вход и обзор.
+
+  Это НЕ тот фронт, который описан в макете. Настоящий — React, задача 6 плана.
+  Здесь ровно столько, чтобы владелец мог открыть панель в браузере и увидеть
+  свои группы на настоящих данных, пока идут остальные задачи.
+
+  Ни сборки, ни зависимостей, ни внешних файлов: система может стоять без
+  доступа наружу, и страница обязана открываться в этом случае тоже.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Панель контент-фабрики</title>
+<style>
+  :root {
+    --bg: #101214; --panel: #171a1d; --line: #2c3237; --line-soft: #22262a;
+    --text: #e9edf0; --muted: #939da5; --faint: #6b757c;
+    --accent: #3fbf7f; --accent-soft: #8ad9b0; --warn: #e0a92e; --error: #e05a43;
+    --blue: #4a90d9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 400 15px/1.55 system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font: 500 26px/1.2 system-ui; margin: 0 0 20px; }
+  .num { font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px; margin-bottom: 14px;
+  }
+  .card h2 { font: 500 17px/1.3 system-ui; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; }
+
+  .big { font: 500 44px/1 system-ui; letter-spacing: -.03em; margin: 10px 0 2px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  .cell { border-top: 1px solid var(--line-soft); padding-top: 10px; }
+  .cell .k { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .cell .v { font-size: 17px; }
+
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+  .ok { background: var(--accent); } .off { background: var(--faint); }
+  .bad { background: var(--error); } .warn { background: var(--warn); }
+
+  .alarm {
+    border-color: rgba(224,90,67,.4); background: rgba(224,90,67,.12); color: #f3bdb2;
+  }
+  .notice { border-color: rgba(224,169,46,.3); background: rgba(224,169,46,.1); color: #dfc48a; }
+
+  input, button {
+    font: 400 16px system-ui; border-radius: 10px; border: 1px solid var(--line);
+    background: #0f1113; color: var(--text); padding: 12px 14px; width: 100%;
+  }
+  button {
+    background: var(--accent); color: #08150e; border: none; font-weight: 500;
+    height: 52px; margin-top: 12px; cursor: pointer;
+  }
+  label { display: flex; gap: 10px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 14px; }
+  label input { width: auto; }
+  .hidden { display: none; }
+  footer { color: var(--faint); font-size: 12px; margin-top: 26px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login" class="hidden">
+    <h1>Панель контент-фабрики</h1>
+    <div class="card">
+      <input id="password" type="password" placeholder="Пароль" autocomplete="current-password">
+      <label><input id="trusted" type="checkbox"> Не спрашивать на этом устройстве 30 дней</label>
+      <button id="enter">Войти</button>
+      <div id="login-error" class="sub hidden" style="margin-top:12px;color:#f0a698"></div>
+    </div>
+  </div>
+
+  <div id="overview" class="hidden">
+    <h1>Обзор</h1>
+    <div id="health"></div>
+    <div id="alerts"></div>
+    <div id="groups"></div>
+    <footer>
+      Временный экран: вход и обзор. Остальные экраны — по мере готовности.
+    </footer>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function show(which) {
+  $('login').classList.toggle('hidden', which !== 'login');
+  $('overview').classList.toggle('hidden', which !== 'overview');
+}
+
+async function api(path) {
+  const response = await fetch(path, { credentials: 'same-origin' });
+  if (response.status === 401) { show('login'); return null; }
+  if (!response.ok) throw new Error('Ответ ' + response.status);
+  return response.json();
+}
+
+function minutes(seconds) {
+  if (seconds === null || seconds === undefined) return 'ни разу';
+  const m = Math.floor(seconds / 60);
+  return m < 1 ? 'меньше минуты назад' : m + ' мин назад';
+}
+
+function money(value) {
+  return value.toFixed(2).replace('.', ',') + ' ₽';
+}
+
+function slotText(iso) {
+  if (!iso) return 'слотов нет — публикация ближайшим проходом';
+  const at = new Date(iso);
+  return at.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderHealth(health) {
+  // Вставший воркер — авария, а не строчка мелким шрифтом: пока он молчит,
+  // ни один пост не двигается, а панель показывает картинку прошлого.
+  $('health').innerHTML = health.stale
+    ? `<div class="card alarm">
+         <h2>Работа встала</h2>
+         <div>Воркер не отвечал ${minutes(health.tick_age_sec)}.</div>
+       </div>`
+    : `<div class="card"><span class="dot ok"></span>Воркер отработал ${minutes(health.tick_age_sec)}</div>`;
+}
+
+function renderAlerts(alerts, broken) {
+  const items = [];
+  for (const [slug, reason] of Object.entries(broken || {})) {
+    items.push(`<div class="card alarm"><h2>Не читается конфиг: ${slug}</h2>
+      <div class="sub" style="white-space:pre-wrap;color:inherit">${reason}</div></div>`);
+  }
+  for (const alert of alerts) {
+    items.push(`<div class="card notice"><span class="dot warn"></span>${alert.name} · ${alert.scope}</div>`);
+  }
+  $('alerts').innerHTML = items.join('');
+}
+
+function renderGroups(groups) {
+  if (!groups.length) { $('groups').innerHTML = '<div class="card sub">Ни одной группы не подключено.</div>'; return; }
+  $('groups').innerHTML = groups.map((g) => {
+    const state = g.paused
+      ? '<span class="dot off"></span>на паузе'
+      : (g.schedule_off ? '<span class="dot warn"></span>расписание выключено' : '<span class="dot ok"></span>работает');
+    return `<div class="card">
+      <h2>${g.title}</h2>
+      <div class="sub">${state}</div>
+      <div class="big num">${g.waiting}</div>
+      <div class="sub">ждут вашего решения</div>
+      <div class="grid">
+        <div class="cell"><div class="k">в работе</div><div class="v num">${g.working}</div></div>
+        <div class="cell"><div class="k">тем в запасе</div><div class="v num">${g.free_topics}</div></div>
+        <div class="cell"><div class="k">сегодня</div><div class="v num">${money(g.spent_today)}</div></div>
+        <div class="cell"><div class="k">за месяц</div><div class="v num">${money(g.spent_month)}</div></div>
+      </div>
+      <div class="cell" style="margin-top:12px">
+        <div class="k">ближайшая публикация</div>
+        <div class="v">${slotText(g.next_slot)}</div>
+        <div class="sub">сегодня опубликовано ${g.published_today} из ${g.posts_per_day}</div>
+      </div>
+      ${g.failed ? `<div class="sub" style="margin-top:10px;color:#f0a698">сломалось постов: ${g.failed}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function load() {
+  const data = await api('/api/overview');
+  if (!data) return;
+  renderHealth(data.health);
+  renderAlerts(data.alerts, data.broken);
+  renderGroups(data.groups);
+  show('overview');
+}
+
+$('enter').onclick = async () => {
+  $('login-error').classList.add('hidden');
+  const response = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: $('password').value, trusted: $('trusted').checked }),
+  });
+  if (response.ok) { $('password').value = ''; load(); return; }
+  const body = await response.json().catch(() => ({}));
+  $('login-error').textContent = body.detail || 'Пароль не подошёл.';
+  $('login-error').classList.remove('hidden');
+};
+
+$('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('enter').click(); });
+
+load();
+// Обзор обновляется редко: панель работает на одноплатнике, и частый опрос
+// отнимает у воркера то немногое, что у него есть.
+setInterval(() => { if (!$('overview').classList.contains('hidden')) load(); }, 30000);
+</script>
+</body>
+</html>
