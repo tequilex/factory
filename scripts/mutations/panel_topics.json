@@ -1,0 +1,18 @@
+{
+  "module": "factory/panel/api/media.py",
+  "tests": "tests/test_panel_keys.py",
+  "mutations": {
+    "не снимать тревогу о кончающихся темах": [
+        "    alerts.clear(conn, \"no_topics\", slug)",
+        "    pass"
+    ],
+    "принимать пустой список тем": [
+        "    if not lines:\n        raise HTTPException(status_code=422, detail=\"В присланном тексте нет ни одной темы.\")",
+        "    pass"
+    ],
+    "считать повторы добавленными": [
+        "            f\"Добавлено тем: {result.added}.\"",
+        "            f\"Добавлено тем: {len(lines)}.\""
+    ]
+  }
+}

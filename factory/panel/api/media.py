@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from factory.core import assets as core_assets
 from factory.core import db, http
+from factory.core import topics as core_topics
 from factory.core.clock import now_utc, to_iso
 from factory.core.errors import FactoryError
 from factory.core.steps.prompts import scene_prompt
@@ -96,6 +97,48 @@ def reorder(
             )
 
     return Done(ok=True, what_next="Порядок сохранён. Следующая тема берётся сверху.")
+
+
+class NewTopics(BaseModel):
+    #: Текст как есть, по теме в строке. Разбор на стороне сервера, потому что
+    #: тем же разбором пользуется бот: два места, режущие строки по-разному,
+    #: однажды разойдутся на пустой строке или дубле.
+    text: str = Field(min_length=1)
+
+
+class Added(BaseModel):
+    ok: bool
+    added: int
+    skipped: int
+    what_next: str
+
+
+@router.post("/api/topics/{slug}", response_model=Added)
+def add_topics(
+    slug: str, body: NewTopics, conn: sqlite3.Connection = Depends(deps.session)
+) -> Added:
+    """Добавить темы списком в конец очереди."""
+    project = _project(conn, slug)
+    lines = [line.strip() for line in body.text.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=422, detail="В присланном тексте нет ни одной темы.")
+
+    result = core_topics.add(conn, project["id"], lines)
+    from factory.core import alerts
+
+    # Тревога «скоро публиковать нечего» снимается там, где видно, что причина
+    # исчезла: темы появились — значит и повод молчать тоже.
+    alerts.clear(conn, "no_topics", slug)
+
+    return Added(
+        ok=True,
+        added=result.added,
+        skipped=result.skipped,
+        what_next=(
+            f"Добавлено тем: {result.added}."
+            + (f" Повторов пропущено: {result.skipped}." if result.skipped else "")
+        ),
+    )
 
 
 @router.post("/api/posts/{post_id}/image/{position}", response_model=Done)

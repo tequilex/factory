@@ -1,0 +1,22 @@
+{
+  "module": "factory/panel/api/keys.py",
+  "tests": "tests/test_panel_keys.py",
+  "mutations": {
+    "показывать ключ целиком": [
+        "    return f\"…{value[-4:]}\" if value and len(value) >= 4 else None",
+        "    return value"
+    ],
+    "считать заданным ключ, которого нет": [
+        "            present=bool(os.environ.get(config.vk.token_env, \"\")),",
+        "            present=True,"
+    ],
+    "молча принять текст без кода": [
+        "    if code is None:\n        raise HTTPException(",
+        "    if False:\n        raise HTTPException("
+    ],
+    "обменивать код без настроек приложения": [
+        "    if not config.vk.app_id or not config.vk.app_secret_env:",
+        "    if False:"
+    ]
+  }
+}

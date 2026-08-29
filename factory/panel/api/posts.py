@@ -36,6 +36,9 @@ class Asset(BaseModel):
     #: адресом по номеру поста и позиции.
     ready: bool
     composed: bool
+    #: Эту картинку поставил владелец, а не модель. Показывается ярлыком: иначе
+    #: «перерисовать все» однажды сотрёт то, что он подобрал сам.
+    replaced_by_owner: bool
 
 
 class PostBrief(BaseModel):
@@ -135,6 +138,7 @@ def post_detail(
             seed=item["seed"],
             ready=bool(item["local_path"]),
             composed=item["external_ref"] == "composed",
+            replaced_by_owner=bool(item["replaced_by_owner"]),
         )
         for item in conn.execute(
             "SELECT * FROM assets WHERE post_id = ? "
