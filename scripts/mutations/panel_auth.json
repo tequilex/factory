@@ -1,0 +1,42 @@
+{
+  "module": "factory/panel/auth.py",
+  "tests": "tests/test_panel_auth.py",
+  "mutations": {
+    "не проверять подпись куки": [
+      "    if not hmac.compare_digest(expected, parts[2]):\n        return False",
+      "    pass"
+    ],
+    "не проверять срок куки": [
+      "    return (time.time() if now is None else now) < expires",
+      "    return True"
+    ],
+    "не включать срок в подпись": [
+      "    payload = f\"v1.{expires}\"\n    expected = hmac.new(_signing_key(), payload.encode(\"ascii\"), hashlib.sha256).hexdigest()\n    if not hmac.compare_digest(expected, parts[2]):",
+      "    payload = \"v1\"\n    expected = hmac.new(_signing_key(), payload.encode(\"ascii\"), hashlib.sha256).hexdigest()\n    if not hmac.compare_digest(expected, parts[2]):"
+    ],
+    "хранить пароль без соли": [
+      "    salt = stdlib_secrets.token_bytes(16)",
+      "    salt = b\"0123456789abcdef\""
+    ],
+    "пускать с любым паролем": [
+      "    return hmac.compare_digest(digest.hex(), digest_hex)",
+      "    return True"
+    ],
+    "ронять проверку на испорченной куке": [
+      "    try:\n        expires = int(parts[1])\n    except ValueError:\n        return False",
+      "    expires = int(parts[1]) if parts[1].isdigit() else parts[1]"
+    ],
+    "принимать пустой пароль": [
+      "    if not password:",
+      "    if False:"
+    ],
+    "давать недоверенному устройству тот же срок": [
+      "    lifetime = DEFAULT_DAYS * 86400 if trusted else SHORT_HOURS * 3600",
+      "    lifetime = DEFAULT_DAYS * 86400"
+    ],
+    "не менять секрет при выходе на всех устройствах": [
+      "    secrets.update_secret(SECRET_ENV, stdlib_secrets.token_urlsafe(32))\n\n\ndef _stored_hash",
+      "    pass\n\n\ndef _stored_hash"
+    ]
+  }
+}

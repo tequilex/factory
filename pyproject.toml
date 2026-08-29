@@ -11,6 +11,10 @@ dependencies = [
     "typer>=0.12",
     "aiogram>=3.15,<4",
     "aiohttp-socks>=0.9",
+    # Панель управления. Оба пакета чистый python: на arm64 ставятся
+    # готовыми колёсами, собирать на малине нечего.
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]

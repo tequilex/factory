@@ -216,6 +216,65 @@ def bot() -> None:
 
 
 @app.command()
+def panel(
+    host: str = typer.Option("0.0.0.0", help="Адрес, на котором слушать."),
+    port: int = typer.Option(8080, help="Порт."),
+) -> None:
+    """Запустить панель управления.
+
+    Наружу порт не открывается: до панели дотягиваются только устройства
+    владельца через Tailscale. Слушать при этом надо на всех адресах, иначе
+    внутри контейнера её не увидит даже своя сеть.
+    """
+    import uvicorn
+
+    from factory.core.secrets import load_env_file
+    from factory.panel.app import create_app
+
+    setup_logging("INFO")
+    load_env_file()
+    try:
+        uvicorn.run(create_app(), host=host, port=port, log_config=None)
+    except FactoryError as exc:
+        fail(exc)
+    except KeyboardInterrupt:
+        typer.echo("Панель остановлена.")
+
+
+@app.command("panel-password")
+def panel_password() -> None:
+    """Задать или сменить пароль от панели.
+
+    Пароль не передаётся аргументом намеренно: аргументы командной строки видны
+    всем процессам в системе и остаются в истории терминала.
+    """
+    from factory.core.secrets import load_env_file
+    from factory.panel import auth as panel_auth
+
+    load_env_file()
+    password = typer.prompt("Новый пароль", hide_input=True, confirmation_prompt=True)
+    try:
+        panel_auth.set_password(password)
+    except FactoryError as exc:
+        fail(exc)
+
+    typer.echo(f"Пароль записан в {paths.env_file()}.")
+    typer.echo("Прежние входы на всех устройствах остались действительными.")
+    typer.echo("Чтобы разлогинить всех, выполни: factory panel-logout-all")
+
+
+@app.command("panel-logout-all")
+def panel_logout_all() -> None:
+    """Отозвать вход на всех устройствах."""
+    from factory.core.secrets import load_env_file
+    from factory.panel import auth as panel_auth
+
+    load_env_file()
+    panel_auth.reset_secret()
+    typer.echo("Готово: на всех устройствах панель попросит пароль заново.")
+
+
+@app.command()
 def run(
     once: bool = typer.Option(False, "--once", help="Один тик и выход. Для отладки."),
     loop: bool = typer.Option(False, "--loop", help="Бесконечный цикл. Режим контейнера."),
