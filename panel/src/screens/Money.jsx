@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { api, money, when } from '../api.js';
-import { Failed, Loading, useData } from '../ui.jsx';
+import { Btn, Failed, Loading, useData } from '../ui.jsx';
 
 export function Spending() {
   const [days, setDays] = useState(30);
@@ -18,15 +18,14 @@ export function Spending() {
 
   return (
     <>
-      <h1>Расходы</h1>
-      <p className="lead">Картинки — почти вся цена поста</p>
+      <div className="head"><div><h1>Расходы</h1><div className="under">Картинки — почти вся цена поста</div></div></div>
 
       <div className="row wrap" style={{ marginBottom: 14 }}>
         {[7, 30, 90].map((value) => (
           <button
             key={value}
             type="button"
-            className={`act small ${days === value ? '' : 'ghost'}`}
+            className="btn"
             onClick={() => setDays(value)}
           >
             {value} дней
@@ -35,19 +34,19 @@ export function Spending() {
       </div>
 
       <div className="card">
-        <div className="grid2" style={{ marginTop: 0 }}>
+        <div className="stats" style={{ marginTop: 0 }}>
           <div className="cell" style={{ borderTop: 'none', paddingTop: 0 }}>
             <div className="kicker">всего за период</div>
-            <div className="v num">{money(data.total)}</div>
+            <div className="v">{money(data.total)}</div>
           </div>
           <div className="cell" style={{ borderTop: 'none', paddingTop: 0 }}>
             <div className="kicker">средняя цена поста</div>
-            <div className="v num">{data.average_post === null ? '—' : money(data.average_post)}</div>
+            <div className="v">{data.average_post === null ? '—' : money(data.average_post)}</div>
           </div>
         </div>
 
         {data.days.length === 0 ? (
-          <div className="sub mt">За этот период трат не было.</div>
+          <div className="muted">За этот период трат не было.</div>
         ) : (
           <>
             <div className="chart">
@@ -63,7 +62,7 @@ export function Spending() {
                 );
               })}
             </div>
-            <div className="row wrap sub">
+            <div className="row wrap muted">
               <span><span className="dot ok" />картинки</span>
               <span><span className="dot warn" />проверка фактов</span>
               <span><span className="dot work" />тексты</span>
@@ -74,22 +73,22 @@ export function Spending() {
 
       <div className="card">
         <div className="kicker">по дням</div>
-        <div className="list">
+        <div className="rows">
           {[...data.days].reverse().map((day) => {
             const total = day.text + day.factcheck + day.images + day.other;
             return (
-              <div className="item" key={day.day}>
-                <div className="grow num">{day.day}</div>
-                <div className="sub num">
+              <div className="rowcard" key={day.day}>
+                <div className="grow mono">{day.day}</div>
+                <div className="muted">
                   тексты {money(day.text + day.other)} · фактчек {money(day.factcheck)} · картинки {money(day.images)}
                 </div>
-                <div className="num">{money(total)}</div>
+                <div className="mono">{money(total)}</div>
               </div>
             );
           })}
         </div>
         {data.days.length === 0 ? null : (
-          <div className="faint mt">
+          <div className="faint">
             Пустой день означает, что система в этот день ничего не готовила:
             стояла на паузе, ждала тем или упиралась в истёкший ключ.
           </div>
@@ -111,20 +110,19 @@ export function Events({ onOpen }) {
 
   return (
     <>
-      <h1>Что происходит</h1>
-      <p className="lead">Последние действия системы</p>
+      <div className="head"><div><h1>Что происходит</h1><div className="under">Последние действия системы</div></div></div>
 
       <label className="check" style={{ marginBottom: 14 }}>
         <input type="checkbox" checked={onlyErrors} onChange={(event) => setOnlyErrors(event.target.checked)} />
         Только ошибки
       </label>
 
-      {data.length === 0 ? <div className="card sub">Записей нет.</div> : null}
+      {data.length === 0 ? <div className="card muted">Записей нет.</div> : null}
 
-      <div className="list">
+      <div className="rows">
         {data.map((event, index) => (
-          <div className="item" key={index}>
-            <span className="faint num" style={{ width: 92, flex: 'none' }}>{when(event.at)}</span>
+          <div className="rowcard" key={index}>
+            <span className="faint mono" style={{ width: 92, flex: 'none' }}>{when(event.at)}</span>
             <span className={`dot ${event.ok ? 'ok' : 'bad'}`} />
             <div className="grow">
               <div>
@@ -139,12 +137,12 @@ export function Events({ onOpen }) {
                 ) : 'Система'}{' — '}{event.step_label}
               </div>
               {event.error ? (
-                <div className="sub" style={{ color: 'var(--error-text)', whiteSpace: 'pre-wrap' }}>
+                <div className="muted" style={{ color: 'var(--error-text)', whiteSpace: 'pre-wrap' }}>
                   {event.error}
                 </div>
               ) : null}
             </div>
-            {event.cost ? <span className="faint num">{money(event.cost)}</span> : null}
+            {event.cost ? <span className="faint mono">{money(event.cost)}</span> : null}
           </div>
         ))}
       </div>

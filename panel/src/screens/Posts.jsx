@@ -1,96 +1,125 @@
-// Список постов. На компьютере таблица, на телефоне карточки — но и там, и
-// там строка одна и та же, просто перестроенная: два разных представления
-// разъехались бы при первой же правке.
+// Посты: таблица на компьютере, те же строки колонкой на телефоне.
 
 import React, { useState } from 'react';
 import { api, money, stateTone, when } from '../api.js';
-import { Failed, Loading, useData } from '../ui.jsx';
+import { Btn, Failed, Loading, useData } from '../ui.jsx';
 
-export default function Posts({ initial, onOpen }) {
+// Чипы-счётчики: сколько постов в каждом состоянии. Порядок — по тому, как
+// часто владелец сюда заглядывает, а не по ходу конвейера.
+const CHIPS = [
+  ['in_review', 'на просмотре'],
+  ['approved', 'одобрены'],
+  ['failed', 'сломались'],
+  ['published', 'опубликованы'],
+  ['rejected', 'выброшены'],
+];
+
+export default function Posts({ initial, onOpen, onToast }) {
   const [state, setState] = useState(initial?.state || '');
-  const states = useData(() => api.states(), []);
-  const { loading, data, error, refresh } = useData(() => api.posts({ state }), [state]);
+  const all = useData(() => api.posts({ limit: 200 }), []);
+  const { loading, data, error, refresh } = useData(() => api.posts({ state, limit: 100 }), [state]);
 
   if (error) return <Failed error={error} onRetry={refresh} />;
 
+  const counts = {};
+  (all.data || []).forEach((post) => { counts[post.state] = (counts[post.state] || 0) + 1; });
+  const waiting = counts.in_review || 0;
+
   return (
     <>
-      <h1>Посты</h1>
-      <p className="lead">Свежие сверху</p>
+      <div className="head">
+        <div>
+          <h1>Посты</h1>
+          <div className="under">
+            {(all.data || []).length} постов · {waiting} ждут решения
+          </div>
+        </div>
+        <div className="tools">
+          <Btn kind="plain" onRun={async () => { refresh(); all.refresh(); }} done="Обновлено">Обновить</Btn>
+        </div>
+      </div>
 
-      <div className="row wrap" style={{ marginBottom: 14 }}>
+      <div className="row wrap" style={{ gap: 8 }}>
         <button
           type="button"
-          className={`act small ${state === '' ? '' : 'ghost'}`}
+          className="btn"
+          style={state === '' ? { borderColor: 'var(--accent)', color: 'var(--accent-2)' } : null}
           onClick={() => setState('')}
         >
-          Все
+          все · {(all.data || []).length}
         </button>
-        {['in_review', 'approved', 'failed', 'published'].map((code) => (
+        {CHIPS.map(([code, label]) => (
           <button
             key={code}
             type="button"
-            className={`act small ${state === code ? '' : 'ghost'}`}
+            className={`btn ${code === 'failed' && counts[code] ? 'bad' : ''}`}
+            style={state === code ? { borderColor: 'var(--accent)', color: 'var(--accent-2)' } : null}
             onClick={() => setState(code)}
           >
-            {states.data?.[code] || code}
+            {label} · {counts[code] || 0}
           </button>
         ))}
       </div>
 
       {loading && !data ? <Loading /> : null}
+      {data && data.length === 0 ? <div className="card muted">Здесь пусто.</div> : null}
 
-      {data && data.length === 0 ? (
-        <div className="card sub">Здесь пусто.</div>
-      ) : null}
+      {data && data.length ? (
+        <div className="table">
+          <div className="th">
+            <span />
+            <span>заголовок</span>
+            <span>состояние</span>
+            <span>цена</span>
+            <span>когда</span>
+          </div>
 
-      <div className="list">
-        {(data || []).map((post) => (
-          <div className="item" key={post.id}>
-            {post.has_cover ? (
-              <img
-                src={api.imageUrl(post.id, 0)}
-                alt=""
-                width={48}
-                height={60}
-                loading="lazy"
-                style={{ borderRadius: 6, objectFit: 'cover', flex: 'none' }}
-              />
-            ) : (
-              <div style={{ width: 48, height: 60, borderRadius: 6, background: 'var(--panel-soft)', flex: 'none' }} />
-            )}
+          {data.map((post) => (
+            <React.Fragment key={post.id}>
+              <button type="button" className="tr" onClick={() => onOpen('post', { id: post.id })}>
+                {post.has_cover ? (
+                  <img className="thumb" src={api.imageUrl(post.id, 0)} alt="" loading="lazy" />
+                ) : (
+                  <span className="thumb" />
+                )}
+                <span style={{ font: '400 14px/1.35 var(--sans)' }}>{post.title || 'без заголовка'}</span>
+                <span
+                  className="row hide-s"
+                  style={{ gap: 7, font: '400 13px/1 var(--sans)', color: 'var(--text-2)' }}
+                >
+                  <span className={`dot s ${stateTone(post.state)}`} />
+                  {post.state_label}
+                </span>
+                <span className="mono hide-s" style={{ font: '400 13px/1 var(--mono)' }}>{money(post.cost)}</span>
+                <span className="hide-s muted">{when(post.created_at)}</span>
+              </button>
 
-            <button
-              type="button"
-              className="grow"
-              onClick={() => onOpen('post', { id: post.id })}
-              style={{ background: 'none', border: 'none', color: 'inherit', textAlign: 'left', cursor: 'pointer', padding: 0 }}
-            >
-              <div className="title">{post.title || 'без заголовка'}</div>
-              <div className="sub">
-                <span className={`dot ${stateTone(post.state)}`} />
-                {post.state_label} · {money(post.cost)} · {when(post.created_at)}
-              </div>
               {post.state === 'failed' && post.last_error ? (
-                <div className="sub" style={{ color: 'var(--error-text)' }}>
-                  {post.last_error.split('\n')[0]}
+                <div className="broken">
+                  <div className="why">
+                    <span className="grow" style={{ font: '400 13px/1.5 var(--sans)', color: 'var(--error-text-3)' }}>
+                      {post.last_error}
+                    </span>
+                    <Btn
+                      kind="line none"
+                      done="Вернул в работу"
+                      onRun={async () => {
+                        try {
+                          const answer = await api.decide(post.id, 'fix');
+                          onToast(answer.what_next);
+                          refresh();
+                        } catch (problem) { onToast(problem.message, true); throw problem; }
+                      }}
+                    >
+                      Попробовать снова
+                    </Btn>
+                  </div>
                 </div>
               ) : null}
-            </button>
-
-            {post.external_id ? (
-              <a
-                className="act small ghost"
-                href={`https://vk.com/wall${post.external_id}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                В ВК
-              </a>
-            ) : null}
-          </div>
-        ))}
-      </div>
+            </React.Fragment>
+          ))}
+        </div>
+      ) : null}
     </>
   );
 }

@@ -1,8 +1,7 @@
-// Мелкие общие части: тема, сообщения, диалог, кнопка с тремя состояниями.
+// Общие части интерфейса.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-/** Тёмная или светлая. Системная настройка уважается, выбор запоминается. */
 export function useTheme() {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('factory-theme');
@@ -19,51 +18,81 @@ export function useTheme() {
 }
 
 /**
- * Кнопка действия с тремя состояниями: можно нажать → выполняется → сделано.
+ * Решение: заголовок и последствие под ним.
  *
- * Главное правило интерфейса: система работает сама и медленно, «Опубликовать»
- * не публикует, а ставит отметку. Кнопка, возвращающаяся в исходное состояние
- * мгновенно, обещает то, чего не произошло.
+ * Три состояния — можно нажать, выполняется, принято — и все три видны. Система
+ * работает сама и медленно: «Опубликовать» не публикует, а ставит отметку.
+ * Кнопка, мгновенно возвращающаяся в исходное, обещает то, чего не произошло.
  */
-export function Action({ onRun, children, price, kind = '', done = 'Принято', disabled, ...rest }) {
+export function Choice({ what, then, busy = 'Принято, выполняется', done, kind = '', onRun, disabled }) {
   const [state, setState] = useState('idle');
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
 
-  const run = useCallback(async () => {
+  const run = async () => {
+    setState('busy');
+    try {
+      await onRun();
+      if (alive.current) setState('done');
+      setTimeout(() => alive.current && setState('idle'), 3000);
+    } catch {
+      if (alive.current) setState('idle');
+    }
+  };
+
+  const label = state === 'busy' ? busy : state === 'done' ? (done || busy) : what;
+  const under = state === 'idle' ? then : state === 'busy' ? 'воркер подхватит ближайшим проходом' : null;
+
+  return (
+    <button
+      type="button"
+      className={`choice ${kind} ${state !== 'idle' ? 'busy' : ''}`}
+      disabled={disabled || state !== 'idle'}
+      onClick={run}
+    >
+      <span className="what">{label}</span>
+      {under ? <span className="then">{under}</span> : null}
+    </button>
+  );
+}
+
+/** Обычная кнопка с тем же правилом трёх состояний, но без подписи снизу. */
+export function Btn({ children, onRun, kind = '', done = 'Готово', disabled, ...rest }) {
+  const [state, setState] = useState('idle');
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  if (!onRun) {
+    return <button type="button" className={`btn ${kind}`} disabled={disabled} {...rest}>{children}</button>;
+  }
+
+  const run = async () => {
     setState('busy');
     try {
       await onRun();
       if (alive.current) setState('done');
       setTimeout(() => alive.current && setState('idle'), 2500);
-    } catch (error) {
+    } catch {
       if (alive.current) setState('idle');
-      throw error;
     }
-  }, [onRun]);
+  };
 
   return (
     <button
       type="button"
-      className={`act ${kind}`}
-      // Собственное состояние и внешний запрет складываются. Раньше внешний
-      // disabled перекрывал своё, и на время выполнения кнопка снова
-      // становилась нажимаемой — двойное нажатие уходило дважды.
+      className={`btn ${kind}`}
       disabled={disabled || state !== 'idle'}
-      onClick={() => run().catch(() => {})}
+      onClick={run}
       {...rest}
     >
       {state === 'busy' ? 'Выполняется…' : state === 'done' ? done : children}
-      {state === 'idle' && price ? <span className="price">{price}</span> : null}
     </button>
   );
 }
 
-/** Сообщение внизу экрана. Текст берётся от сервера как есть. */
 export function Toast({ message, bad, onHide }) {
   useEffect(() => {
     if (!message) return undefined;
-    // Ошибки висят дольше: их читают, а подтверждения только замечают.
     const timer = setTimeout(onHide, bad ? 9000 : 5000);
     return () => clearTimeout(timer);
   }, [message, bad, onHide]);
@@ -72,10 +101,10 @@ export function Toast({ message, bad, onHide }) {
   return <div className={`toast ${bad ? 'bad' : ''}`} onClick={onHide}>{message}</div>;
 }
 
-export function Modal({ title, children, onClose }) {
+export function Sheet({ title, children, onClose }) {
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+    <div className="back" onClick={onClose}>
+      <div className="sheet" onClick={(event) => event.stopPropagation()}>
         <h2>{title}</h2>
         {children}
       </div>
@@ -83,7 +112,6 @@ export function Modal({ title, children, onClose }) {
   );
 }
 
-/** Данные с сервера: загрузка, ошибка, повтор. */
 export function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
 
@@ -101,15 +129,17 @@ export function useData(load, deps = []) {
 }
 
 export function Loading({ what = 'Загружаю…' }) {
-  return <div className="card sub">{what}</div>;
+  return <div className="card muted">{what}</div>;
 }
 
 export function Failed({ error, onRetry }) {
   return (
-    <div className="card alarm">
-      <h2>Не получилось загрузить</h2>
-      <div className="sub" style={{ color: 'inherit', whiteSpace: 'pre-wrap' }}>{String(error.message)}</div>
-      {onRetry ? <button type="button" className="act ghost mt" onClick={onRetry}>Попробовать снова</button> : null}
+    <div className="banner bad">
+      <div className="grow">
+        <div className="head-line">Не получилось загрузить</div>
+        <div className="why" style={{ whiteSpace: 'pre-wrap' }}>{String(error.message)}</div>
+      </div>
+      {onRetry ? <button type="button" className="btn bad none" onClick={onRetry}>Ещё раз</button> : null}
     </div>
   );
 }
