@@ -33,6 +33,12 @@ export default function Group({ slug, onToast }) {
   const vk = draft.vk || {};
   const perPost =
     (Number(image.price_per_image) || 0) * ((Number(image.inline_count) || 0) + 1);
+  // Проверка та же, что в конфиге: панель не имеет права быть снисходительнее,
+  // но и узнавать о противоречии владелец должен до сохранения, а не после.
+  const tooSmall =
+    Number(limits.queue_buffer) > 0 &&
+    Number(limits.posts_per_day) > Number(limits.queue_buffer);
+  const perDay = perPost * (Number(limits.posts_per_day) || 0);
 
   return (
     <>
@@ -78,9 +84,10 @@ export default function Group({ slug, onToast }) {
           />
         </label>
         <label className="field">
-          <span className="kicker">держать в работе (не меньше публикаций в сутки)</span>
+          <span className="kicker">держать в работе — не меньше публикаций в сутки</span>
           <input
             type="number" min="1" value={limits.queue_buffer ?? ''}
+            className={tooSmall ? 'bad' : ''}
             onChange={(event) => set('limits', 'queue_buffer', Number(event.target.value))}
           />
         </label>
@@ -91,7 +98,42 @@ export default function Group({ slug, onToast }) {
             onChange={(event) => set('limits', 'max_cost_per_post', Number(event.target.value))}
           />
         </label>
-        <Btn kind="plain" onRun={save('limits')} done="Сохранено">Сохранить лимиты</Btn>
+
+        {/* Противоречие должно быть видно здесь, а не после нажатия «Сохранить»:
+            система физически не выпустит больше постов, чем держит в работе. */}
+        {tooSmall ? (
+          <div className="banner warn">
+            <div className="row top" style={{ gap: 10 }}>
+              <span className="dot warn" style={{ marginTop: 6 }} />
+              <span style={{ font: '400 13px/1.5 var(--sans)', color: 'var(--warn-text)' }}>
+                «Держать в работе» ({limits.queue_buffer}) меньше публикаций в сутки
+                ({limits.posts_per_day}) — столько постов система выпустить не сможет.
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ marginTop: 10 }}
+                  onClick={() => set('limits', 'queue_buffer', Number(limits.posts_per_day) * 3)}
+                >
+                  Поставить {Number(limits.posts_per_day) * 3}
+                </button>
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Цена решения — до нажатия. Шестьдесят постов в сутки это не «больше
+            контента», а счёт, который приходит в конце месяца. */}
+        {perDay ? (
+          <div className="card soft">
+            {limits.posts_per_day} постов в сутки — это примерно{' '}
+            <b className="mono">{money(perDay)}</b> в день и{' '}
+            <b className="mono">{money(perDay * 30)}</b> в месяц при нынешних моделях.
+          </div>
+        ) : null}
+
+        <Btn kind="plain" onRun={save('limits')} done="Сохранено" disabled={tooSmall}>
+          Сохранить лимиты
+        </Btn>
       </div>
 
       <div className="card">

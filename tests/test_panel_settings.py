@@ -64,6 +64,27 @@ class TestSaving:
         assert "posts_per_day" in response.json()["detail"]
         assert load_project("demo").limits.posts_per_day == 2
 
+    def test_the_error_speaks_panel_language(self, panel):
+        """В панели не бывает «исправь в файле» — владелец правит форму.
+
+        Та же ошибка из командной строки советует открыть config.yaml и
+        заглянуть в RUNBOOK. Владелец, который никогда не видел этого файла,
+        получал совет, которым не может воспользоваться.
+        """
+        response = panel["client"].post(
+            "/api/groups/demo/settings",
+            json={"changes": {"limits": {"posts_per_day": 67}}},
+        )
+
+        detail = response.json()["detail"]
+        assert response.status_code == 422
+        assert "queue_buffer" in detail, "причина должна остаться"
+        assert "в форме" in detail
+        assert "config.yaml" not in detail, "путь к файлу владельцу ничего не говорит"
+        assert "/" not in detail, "путь к файлу владельцу ничего не говорит"
+        assert "RUNBOOK" not in detail
+        assert "Найдено проблем" not in detail, "счётчик пугает и ничего не добавляет"
+
     def test_a_section_outside_the_list_is_refused(self, panel):
         """Список разделов закрыт: новая настройка не появляется в панели сама.
 

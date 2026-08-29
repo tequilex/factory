@@ -55,6 +55,29 @@ class Saved(BaseModel):
     what_next: str
 
 
+def _in_panel_words(exc: FactoryError) -> str:
+    """Ошибка проверки, переписанная для панели.
+
+    Из командной строки та же ошибка советует «исправь поля в файле и повтори
+    команду» и отсылает к RUNBOOK. В панели это вредный совет: владелец правит
+    форму, а не файл, и никакого файла в глаза не видел.
+
+    Оставляем то, что действительно объясняет отказ — перечень проблем, — и
+    добавляем совет по месту. Заголовок с путём к файлу выбрасываем: в панели
+    он не значит ничего, а выглядит как поломка системы, а не опечатка в поле.
+    """
+    parts = []
+    if exc.why:
+        # Первая строка «why» — это «Найдено проблем: N», её тоже незачем:
+        # проблемы и так перечислены ниже, а счётчик пугает.
+        lines = [line.strip() for line in exc.why.splitlines() if line.strip()]
+        parts += [line for line in lines if not line.startswith("Найдено проблем")]
+    if not parts:
+        parts.append(exc.what)
+    parts.append("Поправьте поля в форме — сохранение до этого не пройдёт.")
+    return "\n".join(parts)
+
+
 def _known(slug: str, conn: sqlite3.Connection) -> None:
     row = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
     if row is None:
@@ -97,7 +120,7 @@ def preview_settings(
     try:
         text = config_write.preview(slug, body.changes)
     except FactoryError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=_in_panel_words(exc)) from exc
 
     return Settings(slug=slug, raw=text, values=body.changes)
 
@@ -111,7 +134,7 @@ def save_settings(
     try:
         config_write.update(slug, body.changes)
     except FactoryError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=_in_panel_words(exc)) from exc
 
     return Saved(
         ok=True,
