@@ -1,0 +1,34 @@
+{
+  "module": "factory/panel/api/actions.py",
+  "tests": "tests/test_panel_actions.py",
+  "mutations": {
+    "считать решение применённым, даже если оно отвергнуто": [
+      "    if not decisions.apply(conn, post_id, body.decision, version=body.version):\n        _refuse(conn, post_id)",
+      "    decisions.apply(conn, post_id, body.decision, version=body.version)"
+    ],
+    "терять вариант, под которым нажали": [
+      "    if not decisions.apply(conn, post_id, body.decision, version=body.version):",
+      "    if not decisions.apply(conn, post_id, body.decision):"
+    ],
+    "отвечать общим «нельзя» вместо состояния поста": [
+      "        detail=STALE_REASON.get(row[\"state\"], \"Пост сейчас переделывается, решать пока нечего.\"),",
+      "        detail=\"Нельзя.\","
+    ],
+    "подменять вариант у поста, уехавшего дальше": [
+      "        guard = conn.execute(\n            \"SELECT id FROM posts WHERE id = ? AND state = ?\", (post_id, State.IN_REVIEW)\n        ).fetchone()\n        restored = guard is not None and versions.restore_within(conn, post_id, number)",
+      "        restored = versions.restore_within(conn, post_id, number)"
+    ],
+    "пересобирать обложку при правке одного текста": [
+      "        cover_changes=bool(title and title != current[\"title\"]),",
+      "        cover_changes=True,"
+    ],
+    "не пересобирать обложку при смене заголовка": [
+      "        cover_changes=bool(title and title != current[\"title\"]),",
+      "        cover_changes=False,"
+    ],
+    "молчать о последствиях действия": [
+      "        what_next=WHAT_NEXT[body.decision],",
+      "        what_next=\"Готово.\","
+    ]
+  }
+}
