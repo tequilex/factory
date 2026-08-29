@@ -1,0 +1,46 @@
+{
+  "module": "factory/core/assets.py",
+  "tests": "tests/test_panel_media.py",
+  "mutations": {
+    "не снимать отметки об альбоме": [
+        "        \"next_attempt_at = NULL, review_message_id = NULL, review_album_at = NULL, \"\n        \"review_album_message_id = NULL, updated_at = ? WHERE id = ?\",",
+        "        \"next_attempt_at = NULL, updated_at = ? WHERE id = ?\","
+    ],
+    "не снимать отметку сборки с заменённой обложки": [
+        "            \"external_ref = CASE WHEN kind = ? THEN NULL ELSE external_ref END \"\n            \"WHERE id = ?\",\n            (str(path), AssetKind.COVER, asset[\"id\"]),",
+        "            \"external_ref = external_ref \"\n            \"WHERE id = ?\",\n            (str(path), AssetKind.COVER, asset[\"id\"]),"
+    ],
+    "менять картинки у поста в любом состоянии": [
+        "            \"SELECT id, version FROM posts WHERE id = ? AND state = ?\",\n            (post_id, State.IN_REVIEW),",
+        "            \"SELECT id, version FROM posts WHERE id = ?\",\n            (post_id,),"
+    ],
+    "перерисовывать картинки у поста в любом состоянии": [
+        "            \"SELECT id FROM posts WHERE id = ? AND state = ?\", (post_id, State.IN_REVIEW)",
+        "            \"SELECT id FROM posts WHERE id = ?\", (post_id,)"
+    ],
+    "не менять seed при перерисовке": [
+        "            (randint(1, SEED_MAX), prompt, AssetKind.COVER, asset[\"id\"]),",
+        "            (asset[\"seed\"], prompt, AssetKind.COVER, asset[\"id\"]),"
+    ],
+    "не стирать файл перерисовываемой картинки": [
+        "            \"UPDATE assets SET local_path = NULL, replaced_by_owner = 0, seed = ?, \"",
+        "            \"UPDATE assets SET local_path = local_path, replaced_by_owner = 0, seed = ?, \""
+    ],
+    "стирать файлы всех картинок, а не одной": [
+        "            \"WHERE id = ?\",\n            (randint(1, SEED_MAX), prompt, AssetKind.COVER, asset[\"id\"]),",
+        "            \"WHERE post_id = ?\",\n            (randint(1, SEED_MAX), prompt, AssetKind.COVER, post_id),"
+    ],
+    "не помечать картинку как поставленную владельцем": [
+        "            \"UPDATE assets SET local_path = ?, replaced_by_owner = 1, \"",
+        "            \"UPDATE assets SET local_path = ?, replaced_by_owner = 0, \""
+    ],
+    "класть чужой размер как есть": [
+        "    prepared = fit(data)",
+        "    prepared = data"
+    ],
+    "принимать что угодно вместо картинки": [
+        "    except OSError as exc:\n        raise FactoryError(",
+        "    except _Never as exc:\n        raise FactoryError("
+    ]
+  }
+}

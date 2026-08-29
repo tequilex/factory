@@ -18,6 +18,7 @@ import sqlite3
 from datetime import timedelta
 
 from factory.core import alerts, db, lock, paths
+from factory.core import topics as topics_core
 from factory.core.clock import now_utc, to_iso
 from factory.core.config import ProjectConfig, load_project
 from factory.core.errors import FactoryError
@@ -71,7 +72,7 @@ def _claim_locked(conn: sqlite3.Connection, project_id: int) -> int | None:
     row = conn.execute(
         "UPDATE topics SET status = ? WHERE id = ("
         "  SELECT id FROM topics WHERE project_id = ? AND status = ? "
-        "  ORDER BY requeued_at IS NOT NULL, requeued_at, id LIMIT 1"
+        f"  ORDER BY {topics_core.QUEUE_ORDER} LIMIT 1"
         ") RETURNING id",
         (TopicStatus.TAKEN, project_id, TopicStatus.FREE),
     ).fetchone()

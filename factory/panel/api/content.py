@@ -108,7 +108,7 @@ def topics_view(
 
     rows = conn.execute(
         "SELECT id, title FROM topics WHERE project_id = ? AND status = 'free' "
-        "ORDER BY requeued_at IS NOT NULL, requeued_at, id LIMIT ?",
+        f"ORDER BY {topics.QUEUE_ORDER} LIMIT ?",
         (project_id, limit),
     ).fetchall()
 

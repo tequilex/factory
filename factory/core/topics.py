@@ -84,6 +84,20 @@ def counts(conn: sqlite3.Connection, project_id: int) -> Counts:
     )
 
 
+#: Порядок очереди свободных тем. Одно определение на всех, потому что читают
+#: его трое: воркер, когда берёт следующую тему; бот и панель, когда показывают
+#: «в запасе, в том порядке, в котором их возьмут».
+#:
+#: Разошлись они уже однажды: список показывался по номеру строки, а бралась
+#: тема с учётом возврата в конец — то есть возвращённая тема стояла в списке
+#: первой и уходила в работу последней. Владельцу это выглядело как «система
+#: показывает не то».
+#:
+#: ``position`` впереди всего: это порядок, который владелец задал руками
+#: перетаскиванием, и он главнее любых умолчаний.
+QUEUE_ORDER = "position, requeued_at IS NOT NULL, requeued_at, id"
+
+
 #: Состояние поста человеческим языком. Владелец не обязан знать названия
 #: состояний машины, ему нужно понимать, чего ждать.
 STATE_WORDS: dict[str, str] = {
@@ -111,7 +125,8 @@ class TopicLine:
 def upcoming(conn: sqlite3.Connection, project_id: int, limit: int = PREVIEW) -> list[str]:
     """Ближайшие свободные темы — в том порядке, в котором их возьмут."""
     rows = conn.execute(
-        "SELECT title FROM topics WHERE project_id = ? AND status = ? ORDER BY id LIMIT ?",
+        "SELECT title FROM topics WHERE project_id = ? AND status = ? "
+        f"ORDER BY {QUEUE_ORDER} LIMIT ?",
         (project_id, TopicStatus.FREE, limit),
     ).fetchall()
     return [row["title"] for row in rows]

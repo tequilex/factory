@@ -1,0 +1,18 @@
+{
+  "module": "factory/panel/api/media.py",
+  "tests": "tests/test_panel_media.py",
+  "mutations": {
+    "переставлять темы, уже взятые в работу": [
+        "                \"WHERE id = ? AND project_id = ? AND status = 'free'\",",
+        "                \"WHERE id = ? AND project_id = ?\","
+    ],
+    "переставлять темы чужого проекта": [
+        "                \"WHERE id = ? AND project_id = ? AND status = 'free'\",\n                (order, topic_id, project[\"id\"]),",
+        "                \"WHERE id = ? AND status = 'free'\",\n                (order, topic_id),"
+    ],
+    "игнорировать присланный порядок": [
+        "        for order, topic_id in enumerate(body.ids, start=1):",
+        "        for order, topic_id in enumerate(sorted(body.ids), start=1):"
+    ]
+  }
+}

@@ -32,8 +32,8 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from factory.core import http, paths
-from factory.core.errors import ProviderError
+from factory.core import assets, http, paths
+from factory.core.errors import FactoryError, ProviderError
 from factory.core.logging import get_logger
 from factory.core.retry import with_cost
 from factory.providers.base import IMAGE_HEIGHT, IMAGE_WIDTH, is_spending_limit
@@ -70,51 +70,24 @@ def _advice(status: int, body: str, key_env: str) -> str:
 
 
 def _fit(data: bytes, width: int, height: int) -> bytes:
-    """Привести картинку к запрошенному размеру, не искажая пропорций.
+    """Привести картинку к запрошенному размеру.
 
-    Модель не обязана слушаться поля размера, и молча отдать чужой размер —
-    худший вариант из возможных: сборка обложки растянет квадрат под макет
-    1080×1350, и человек на картинке вытянется. Заметит это владелец, а не
-    система.
+    Модель не обязана слушаться поля размера: на запрос 1080×1350 приходит
+    1072×1344 — она округляет до кратного 16. Молча отдать чужой размер нельзя:
+    сборка обложки растянет кадр под макет, и человек на картинке вытянется.
 
-    Поэтому лишнее срезается по центру, и только потом меняется масштаб.
-    Обрезка честнее растяжения: кадр становится теснее, но пропорции лица
-    остаются те же, ради которых вся возня с образцом и затевалась.
+    Сама обрезка живёт в ``core/assets.py``: тот же код нужен, когда владелец
+    приносит свою картинку с телефона, а две реализации одного правила
+    разойдутся — и разойдутся молча.
     """
     try:
-        image = Image.open(io.BytesIO(data))
-        image.load()
-    except OSError as exc:
+        return assets.fit(data, width, height)
+    except FactoryError as exc:
         raise ProviderError(
             "Провайдер прислал файл, который не открывается как картинка.",
-            why=f"Pillow не смог его прочитать: {exc}.",
+            why=str(exc.why or exc.what),
             what_to_do="Обычно это временный сбой. Система повторит позже.",
         ) from exc
-
-    if image.size == (width, height):
-        return data
-
-    log.warning(
-        "провайдер вернул не тот размер, приводим обрезкой",
-        extra={"got": f"{image.size[0]}x{image.size[1]}", "want": f"{width}x{height}"},
-    )
-
-    image = image.convert("RGB")
-    source_width, source_height = image.size
-    # Сторона, которой слишком много относительно нужных пропорций, срезается.
-    if source_width * height > source_height * width:
-        new_width = round(source_height * width / height)
-        offset = (source_width - new_width) // 2
-        image = image.crop((offset, 0, offset + new_width, source_height))
-    else:
-        new_height = round(source_width * height / width)
-        offset = (source_height - new_height) // 2
-        image = image.crop((0, offset, source_width, offset + new_height))
-
-    image = image.resize((width, height), Image.LANCZOS)
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
 
 
 class OpenAICompatibleImages:
