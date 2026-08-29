@@ -1,0 +1,14 @@
+{
+  "module": "factory/core/retry.py",
+  "tests": "tests/test_waiting.py",
+  "mutations": {
+    "записывать пустые ожидания в ленту": [
+      "                if connection is not None and not _idle_wait(result, spent):",
+      "                if connection is not None:"
+    ],
+    "терять трату, если шаг закончился ожиданием": [
+      "    return getattr(result, \"outcome\", None) == \"waiting\" and not spent",
+      "    return getattr(result, \"outcome\", None) == \"waiting\""
+    ]
+  }
+}

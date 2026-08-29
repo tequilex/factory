@@ -31,7 +31,7 @@
       "MAX_ATTEMPTS = 5"
     ],
     "не записывать стоимость вызова": [
-      "                        cost_usd=_spent_by(args) or cost_of(result),",
+      "                        cost_usd=spent,",
       "                        cost_usd=None,"
     ],
     "не наращивать паузу между попытками": [

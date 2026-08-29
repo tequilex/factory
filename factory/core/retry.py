@@ -111,6 +111,22 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
+def _idle_wait(result: Any, spent: float | None) -> bool:
+    """Шаг посмотрел на пост и решил подождать, ничего не потратив.
+
+    Такие проходы не записываются. Пост на просмотре ждёт человека сутками, а
+    воркер смотрит на него раз в минуту — и каждый взгляд ложился в ``runs``
+    строкой «ждёт решения». За сутки это десять тысяч записей, лента событий
+    превращается в одну повторяющуюся строку, а найти в ней настоящее событие
+    нельзя.
+
+    То, что пост ждёт, и так видно по ``posts.state``. А вот потраченные деньги
+    записываются всегда, даже если шаг закончился ожиданием: иначе трата
+    потеряется.
+    """
+    return getattr(result, "outcome", None) == "waiting" and not spent
+
+
 def record_run(
     conn: sqlite3.Connection,
     *,
@@ -188,14 +204,15 @@ def tracked_call(
                     continue
 
                 duration_ms = int((time.monotonic() - started) * 1000)
-                if connection is not None:
+                spent = _spent_by(args) or cost_of(result)
+                if connection is not None and not _idle_wait(result, spent):
                     record_run(
                         connection,
                         step=step,
                         ok=True,
                         duration_ms=duration_ms,
                         post_id=target_post,
-                        cost_usd=_spent_by(args) or cost_of(result),
+                        cost_usd=spent,
                     )
                 return result
 

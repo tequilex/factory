@@ -193,3 +193,63 @@ class TestABrokenPostDoesNotKeepPromising:
         machine.check_alerts(conn, row, asking["asking_project"], asking["providers"])
 
         assert len(asking["providers"].notifier.forgotten) == 1
+
+
+class TestWaitingIsNotAnEvent:
+    """Ожидание не событие, и в ленту оно попадать не должно.
+
+    Пост на просмотре ждёт человека сутками, а воркер смотрит на него раз в
+    минуту. Каждый взгляд ложился в runs строкой «ждёт решения»: за сутки
+    десять тысяч записей, и лента событий превращалась в одну повторяющуюся
+    строку. Поймано на живом экране — владелец увидел тридцать одинаковых
+    сообщений за пять минут.
+    """
+
+    def test_an_idle_wait_leaves_no_trace(self, pipeline):
+        from factory.core.retry import tracked_call
+        from factory.core.steps import waiting
+
+        @tracked_call("in_review")
+        def step(ctx):
+            return waiting("жду решения владельца")
+
+        step(pipeline["context"](State.IN_REVIEW))
+        step(pipeline["context"](State.IN_REVIEW))
+        step(pipeline["context"](State.IN_REVIEW))
+
+        rows = pipeline["conn"].execute(
+            "SELECT COUNT(*) FROM runs WHERE step = 'in_review'"
+        ).fetchone()[0]
+        assert rows == 0
+
+    def test_a_wait_that_cost_money_is_recorded(self, pipeline):
+        """Трата не должна теряться из-за того, что шаг закончился ожиданием."""
+        from factory.core.retry import tracked_call
+        from factory.core.steps import waiting
+
+        @tracked_call("composed")
+        def step(ctx):
+            ctx.spent += 0.42
+            return waiting("отправил и жду")
+
+        step(pipeline["context"](State.COMPOSED))
+
+        row = pipeline["conn"].execute(
+            "SELECT cost_usd FROM runs WHERE step = 'composed'"
+        ).fetchone()
+        assert row is not None
+        assert row["cost_usd"] == pytest.approx(0.42)
+
+    def test_a_normal_step_is_still_recorded(self, pipeline):
+        from factory.core.retry import tracked_call
+        from factory.core.steps import advanced
+
+        @tracked_call("queued")
+        def step(ctx):
+            return advanced(State.TEXT_READY)
+
+        step(pipeline["context"](State.QUEUED))
+
+        assert pipeline["conn"].execute(
+            "SELECT COUNT(*) FROM runs WHERE step = 'queued'"
+        ).fetchone()[0] == 1
