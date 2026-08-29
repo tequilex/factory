@@ -63,9 +63,13 @@ def factory(*args, env, timeout=90) -> subprocess.CompletedProcess:
     )
 
 
+#: Воркеры, запущенные тестами. Нужны, чтобы прибирать за собой ТОЧЕЧНО.
+_STARTED: list[subprocess.Popen] = []
+
+
 def start_worker(env) -> subprocess.Popen:
     """Запускает воркер в отдельной группе процессов, чтобы его можно было убить."""
-    return subprocess.Popen(
+    worker = subprocess.Popen(
         [str(FACTORY_BIN), "run", "--loop"],
         cwd=REPO_ROOT,
         env=env,
@@ -73,6 +77,8 @@ def start_worker(env) -> subprocess.Popen:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    _STARTED.append(worker)
+    return worker
 
 
 def kill_worker(worker: subprocess.Popen) -> None:
@@ -86,14 +92,28 @@ def kill_worker(worker: subprocess.Popen) -> None:
 
 @pytest.fixture(autouse=True)
 def no_stray_workers():
-    """Добивает всё, что тест мог оставить.
+    """Добивает воркеры, запущенные ЭТИМ тестом. Только их.
 
     Осиротевший воркер продолжает писать в ту же базу, из-за чего следующий тест
     проверяет не то, что думает, а integrity_check идёт по базе, в которую прямо
-    сейчас пишут.
+    сейчас пишут. Прибирать за собой обязательно.
+
+    Раньше здесь стоял ``pkill -9 -f "factory run --loop"``, и он выкашивал
+    ВСЕ воркеры на машине — включая рабочий, запущенный владельцем в соседнем
+    терминале. Три раза подряд это выглядело как «воркер молча умирает сам»:
+    он падал ровно в момент прогона тестов, а в логе оставался обычный тик без
+    единой ошибки. На сервере, где тесты гоняют рядом с боевым процессом, та же
+    строка остановила бы выпуск постов.
+
+    Тест не имеет права трогать ничего за пределами того, что сам запустил.
     """
     yield
-    subprocess.run(["pkill", "-9", "-f", "factory run --loop"], capture_output=True)
+    for worker in _STARTED:
+        try:
+            os.killpg(os.getpgid(worker.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    _STARTED.clear()
 
 
 def open_worker_db(env) -> sqlite3.Connection:
