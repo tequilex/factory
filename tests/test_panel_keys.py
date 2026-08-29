@@ -108,6 +108,25 @@ class TestAddTopics:
         assert "Добавлено тем: 0" in body["what_next"]
         assert "Повторов пропущено: 1" in body["what_next"]
 
+    def test_a_silent_worker_is_named_here_too(self, panel):
+        """Тема добавлена — но пост из неё делает воркер.
+
+        Поймано живьём: владелец добавил тему, увидел «Добавлено тем: 1» и не
+        дождался поста. Предупреждение стояло только на действиях с постами.
+        """
+        body = panel["client"].post("/api/topics/demo", json={"text": "Свежая тема"}).json()
+
+        assert "воркер" in body["what_next"].lower()
+        assert "не потеряно" in body["what_next"]
+
+    def test_nothing_added_means_nothing_promised(self, panel):
+        """Одни повторы — обещать пост не за что."""
+        panel["client"].post("/api/topics/demo", json={"text": "Повтор"})
+
+        body = panel["client"].post("/api/topics/demo", json={"text": "Повтор"}).json()
+
+        assert "воркер" not in body["what_next"].lower()
+
     def test_empty_lines_are_not_topics(self, panel):
         response = panel["client"].post("/api/topics/demo", json={"text": "   \n\n  "})
 
