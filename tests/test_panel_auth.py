@@ -108,6 +108,62 @@ class TestCookie:
         assert auth.check_cookie(issued) is False
 
 
+class TestDatabaseAccess:
+    """Панель ходит в базу из пула потоков, и это не мелочь.
+
+    FastAPI разрешает зависимость в одном потоке, а обработчик выполняет в
+    другом. SQLite такое запрещает, и ловится это только параллельными
+    запросами — то есть на живом экране, а не в тестах, которые ходят по
+    одному. Поймано на настоящем экране: «Ответ 500» почти на каждый переход.
+    """
+
+    def test_a_panel_connection_survives_a_thread_change(self, tmp_env):
+        import threading
+
+        from factory.core import db
+
+        conn = db.connect(cross_thread=True)
+        db.migrate(conn)
+        result = {}
+
+        def read():
+            try:
+                result["rows"] = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            except Exception as exc:  # noqa: BLE001 — записываем, чтобы проверить
+                result["error"] = exc
+
+        worker = threading.Thread(target=read)
+        worker.start()
+        worker.join()
+        conn.close()
+
+        assert "error" not in result, f"соединение не пережило смену потока: {result.get('error')}"
+        assert result["rows"] == 0
+
+    def test_the_default_connection_stays_strict(self, tmp_env):
+        """Воркеру и боту послабление не нужно — у них один поток на всё."""
+        import threading
+
+        from factory.core import db
+
+        conn = db.connect()
+        db.migrate(conn)
+        result = {}
+
+        def read():
+            try:
+                conn.execute("SELECT 1").fetchone()
+            except Exception as exc:  # noqa: BLE001
+                result["error"] = exc
+
+        worker = threading.Thread(target=read)
+        worker.start()
+        worker.join()
+        conn.close()
+
+        assert "error" in result
+
+
 class TestHttp:
     def test_data_needs_a_login(self, panel):
         assert panel.get("/api/session").status_code == 401

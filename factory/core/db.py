@@ -25,8 +25,18 @@ MIGRATION_NAME_RE = re.compile(r"^(\d+)_.+\.sql$")
 BUSY_TIMEOUT_MS = 5000
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    """Open the database with the pragmas this project relies on."""
+def connect(path: Path | None = None, *, cross_thread: bool = False) -> sqlite3.Connection:
+    """Open the database with the pragmas this project relies on.
+
+    ``cross_thread`` нужен панели и только ей. FastAPI разрешает зависимости и
+    выполняет обработчик в РАЗНЫХ потоках пула, а SQLite по умолчанию запрещает
+    трогать соединение из чужого потока. Ловится это не тестами, которые ходят
+    по одному запросу за раз, а живым экраном: пара параллельных запросов — и
+    пятисотая ошибка.
+
+    Само по себе это безопасно: соединение живёт один запрос и в двух потоках
+    одновременно не используется — они просто идут друг за другом.
+    """
     if path is None:
         target = paths.db_path()
         paths.ensure_data_dir()
@@ -35,7 +45,12 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        conn = sqlite3.connect(target, isolation_level=None, timeout=BUSY_TIMEOUT_MS / 1000)
+        conn = sqlite3.connect(
+            target,
+            isolation_level=None,
+            timeout=BUSY_TIMEOUT_MS / 1000,
+            check_same_thread=not cross_thread,
+        )
     except sqlite3.Error as exc:
         raise DbError(
             f"Не удалось открыть базу данных {target}.",

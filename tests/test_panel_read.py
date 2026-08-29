@@ -182,6 +182,28 @@ class TestImages:
         assert response.status_code == 200
         assert Image.open(io.BytesIO(response.content)).size == (1080, 1350)
 
+    def test_a_vanished_file_is_not_reported_as_ready(self, panel):
+        """Запись в базе и файл на диске — разные вещи.
+
+        После публикации папка поста вычищается, а строки в assets остаются:
+        в них история промптов и seed'ов. Панель, верящая базе, показывала
+        битые картинки — браузер пытался их загрузить и не мог.
+        """
+        self._generate(panel)
+        from pathlib import Path
+
+        row = panel["conn"].execute(
+            "SELECT local_path FROM assets WHERE post_id = ? AND position = 0",
+            (panel["post_id"],),
+        ).fetchone()
+        Path(row["local_path"]).unlink()
+
+        body = panel["client"].get(f"/api/posts/{panel['post_id']}").json()
+        brief = panel["client"].get("/api/posts").json()[0]
+
+        assert body["assets"][0]["ready"] is False
+        assert brief["has_cover"] is False
+
     def test_an_absent_image_is_a_404(self, panel):
         response = panel["client"].get(f"/api/posts/{panel['post_id']}/image/0")
 

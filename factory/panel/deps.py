@@ -44,8 +44,13 @@ def label_of(state: str) -> str:
 
 
 def session() -> Iterator[sqlite3.Connection]:
-    """Соединение с базой на один запрос."""
-    conn = db.connect()
+    """Соединение с базой на один запрос.
+
+    ``cross_thread`` обязателен: FastAPI разрешает зависимость в одном потоке
+    пула, а обработчик выполняет в другом, и SQLite это запрещает. Проявляется
+    только при параллельных запросах — то есть на живом экране, а не в тестах.
+    """
+    conn = db.connect(cross_thread=True)
     try:
         yield conn
     finally:

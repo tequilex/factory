@@ -34,6 +34,9 @@ class Asset(BaseModel):
     seed: int | None
     #: Готова ли картинка. Пути наружу не отдаются: файл забирается отдельным
     #: адресом по номеру поста и позиции.
+    #: Файл ЕСТЬ НА ДИСКЕ, а не «в базе записан путь». Это разные вещи: после
+    #: публикации папка поста вычищается, а строки остаются. По записи в базе
+    #: панель показывала бы битые картинки — их пыталась загрузить и не могла.
     ready: bool
     composed: bool
     #: Эту картинку поставил владелец, а не модель. Показывается ярлыком: иначе
@@ -75,6 +78,15 @@ def _cost(conn: sqlite3.Connection, post_id: int) -> float:
     return round(float(row[0]), 2)
 
 
+def _on_disk(path: str | None) -> bool:
+    """Есть ли файл. Запись в базе этого не гарантирует.
+
+    Папка поста вычищается после публикации, а строки в ``assets`` остаются —
+    иначе пропала бы история промптов и seed'ов.
+    """
+    return bool(path) and Path(path).is_file()
+
+
 def _brief(conn: sqlite3.Connection, row: sqlite3.Row) -> PostBrief:
     cover = conn.execute(
         "SELECT local_path FROM assets WHERE post_id = ? AND kind = 'cover'", (row["id"],)
@@ -90,7 +102,7 @@ def _brief(conn: sqlite3.Connection, row: sqlite3.Row) -> PostBrief:
         updated_at=row["updated_at"],
         external_id=row["external_id"],
         last_error=row["last_error"],
-        has_cover=bool(cover and cover["local_path"]),
+        has_cover=_on_disk(cover["local_path"]) if cover else False,
     )
 
 
@@ -136,7 +148,7 @@ def post_detail(
             kind=item["kind"],
             prompt=item["prompt"],
             seed=item["seed"],
-            ready=bool(item["local_path"]),
+            ready=_on_disk(item["local_path"]),
             composed=item["external_ref"] == "composed",
             replaced_by_owner=bool(item["replaced_by_owner"]),
         )
