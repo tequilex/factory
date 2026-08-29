@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 
-from factory.core import db
+from factory.core import db, lock
 from factory.core.config import ProjectConfig, available_slugs, load_project
 from factory.core.errors import FactoryError
 from factory.core.logging import get_logger
@@ -55,6 +55,28 @@ def session() -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def worker_note(conn: sqlite3.Connection) -> str:
+    """Приписка к ответу на действие, когда выполнять его некому.
+
+    Панель ничего не выполняет: она ставит отметку, а работу делает воркер.
+    Пока он молчит, любое «будет нарисовано» и «уйдёт в группу» — обещание,
+    которое никто не выполнит.
+
+    Поймано на живом экране: владелец отправил картинку на перерисовку и
+    поставил свою, получил бодрые подтверждения и не дождался ничего. Обе
+    команды при этом записались верно — работать было некому.
+    """
+    if not lock.heartbeat_is_stale(conn):
+        return ""
+
+    age = lock.heartbeat_age_sec(conn)
+    сколько = "ни разу не отрабатывал" if age is None else f"молчит {int(age // 60)} мин"
+    return (
+        f" ⚠️ Но воркер {сколько} — выполнять задание сейчас некому. "
+        "Оно не потеряно и выполнится, когда он вернётся."
+    )
 
 
 def projects() -> dict[str, ProjectConfig]:

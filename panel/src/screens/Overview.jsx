@@ -1,7 +1,7 @@
 // Обзор: «всё ли в порядке» за две секунды, без чтения.
 
 import React, { useEffect } from 'react';
-import { api, ago, money, when } from '../api.js';
+import { api, money, when } from '../api.js';
 import { Btn, Failed, Loading, useData } from '../ui.jsx';
 
 // Тревога человеческим языком: короткое название и что именно случилось.
@@ -29,7 +29,7 @@ export default function Overview({ onOpen }) {
   if (loading && !data) return <Loading />;
   if (error) return <Failed error={error} onRetry={refresh} />;
 
-  const { health, groups, alerts, broken } = data;
+  const { groups, alerts, broken } = data;
   const now = new Date();
 
   return (
@@ -46,20 +46,6 @@ export default function Overview({ onOpen }) {
           <Btn kind="plain" onRun={async () => refresh()} done="Обновлено">Обновить</Btn>
         </div>
       </div>
-
-      {health.stale ? (
-        <div className="banner bad">
-          <div className="grow">
-            <div className="head-line">
-              <span className="dot bad" />
-              Работа встала: воркер не отвечал {ago(health.tick_age_sec)}
-            </div>
-            <div className="why">
-              Обычно проход раз в минуту. Посты не двигаются, одобренные не публикуются.
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {Object.entries(broken || {}).map(([slug, reason]) => (
         <div className="banner bad" key={slug}>

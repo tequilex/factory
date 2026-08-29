@@ -55,6 +55,28 @@ class TestDecisions:
         assert panel["state"]() == State.APPROVED
         assert response.json()["state"] == State.APPROVED
 
+    def test_a_silent_worker_is_named_in_the_answer(self, panel):
+        """Панель не имеет права обещать работу, которую некому выполнить.
+
+        Поймано на живом экране: владелец отправил картинку на перерисовку и
+        поставил свою, получил бодрые подтверждения и не дождался ничего. Обе
+        команды записались верно — работать было некому.
+        """
+        body = panel["decide"](Decision.APPROVE).json()
+
+        assert "воркер" in body["what_next"].lower()
+        assert "не потеряно" in body["what_next"]
+
+    def test_a_working_worker_adds_no_warning(self, panel):
+        """Приписка про молчание не должна висеть всегда — иначе её перестанут читать."""
+        from factory.core import lock
+
+        lock.write_heartbeat(panel["conn"])
+
+        body = panel["decide"](Decision.APPROVE).json()
+
+        assert "воркер" not in body["what_next"].lower()
+
     def test_the_answer_says_what_happens_next(self, panel):
         """«Готово» здесь всегда враньё: выполняет воркер, а не панель."""
         body = panel["decide"](Decision.APPROVE).json()

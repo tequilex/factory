@@ -106,7 +106,23 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="page">{body}</main>
+      <main className="page">
+        {summary?.health?.stale ? (
+          <div className="banner bad">
+            <div className="grow">
+              <div className="head-line">
+                <span className="dot bad" />
+                Воркер молчит {ago(summary.health.tick_age_sec)}
+              </div>
+              <div className="why">
+                Пока он не вернётся, ни одно действие не выполнится: панель только
+                ставит отметки, а работу делает он. Нажатия не потеряются.
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {body}
+      </main>
 
       <nav className="tabs">
         {PHONE.map((code) => (

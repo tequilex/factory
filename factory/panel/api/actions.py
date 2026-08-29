@@ -107,7 +107,7 @@ def decide(
         ok=True,
         state=row["state"],
         state_label=deps.label_of(row["state"]),
-        what_next=WHAT_NEXT[body.decision],
+        what_next=WHAT_NEXT[body.decision] + deps.worker_note(conn),
     )
 
 
@@ -143,7 +143,7 @@ def edit_text(
             "Заголовок изменён — обложка соберётся заново, картинки не меняются."
             if edit.cover_changes
             else "Текст сохранён. Картинки остаются прежними, денег это не стоит."
-        ),
+        ) + (deps.worker_note(conn) if edit.cover_changes else ""),
     )
 
 
