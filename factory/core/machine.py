@@ -195,8 +195,10 @@ def commit_transition(conn: sqlite3.Connection, post: Post, next_state: str) -> 
     """Record one completed step. Its own transaction, on purpose."""
     with db.write_transaction(conn):
         conn.execute(
+            # Причина ожидания снимается вместе с переходом: пост сдвинулся,
+            # значит то, чего он ждал, случилось.
             "UPDATE posts SET state = ?, retry_count = 0, last_error = NULL, "
-            "next_attempt_at = NULL, updated_at = ? WHERE id = ?",
+            "next_attempt_at = NULL, waiting_reason = NULL, updated_at = ? WHERE id = ?",
             (next_state, to_iso(now_utc()), post.id),
         )
 
@@ -211,8 +213,13 @@ def record_wait(conn: sqlite3.Connection, post: Post, reason: str | None) -> Non
     resume_at = now_utc() + timedelta(seconds=paths.tick_interval_sec())
     with db.write_transaction(conn):
         conn.execute(
-            "UPDATE posts SET next_attempt_at = ?, last_error = NULL WHERE id = ?",
-            (to_iso(resume_at), post.id),
+            # Причина запоминается: без неё на экране остаётся подпись состояния
+            # «рисуются картинки» при том, что рисовать нечем — например,
+            # исчерпан лимит ключа. Владелец смотрит на пост, а не на общий
+            # экран тревог, и причина должна быть там, где видно следствие.
+            "UPDATE posts SET next_attempt_at = ?, last_error = NULL, "
+            "waiting_reason = ? WHERE id = ?",
+            (to_iso(resume_at), reason, post.id),
         )
     log.info("пост ждёт", extra={"post_id": post.id, "state": post.state, "reason": reason})
 

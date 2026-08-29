@@ -93,6 +93,35 @@ def _is_expired(payload: dict | None) -> bool:
         return True
 
 
+def _holder_is_gone(payload: dict | None) -> bool:
+    """Держатель замка — мёртвый процесс на этой же машине.
+
+    Тогда замок точно ничей, сколько бы ни оставалось до истечения срока.
+    Воркер, убитый `kill -9`, снять замок за собой не успевает, и следующий
+    полчаса пропускает каждый тик: посты стоят, а в логе одна строка «работает
+    другой процесс». Со стороны это неотличимо от зависшей системы.
+
+    Проверяется только на своей машине: номера процессов на чужой ничего не
+    значат. Если номер занят кем-то другим, считаем держателя живым и ждём срок
+    — ошибиться в эту сторону безопасно, в обратную нет.
+    """
+    if payload is None or payload.get("holder") != socket.gethostname():
+        return False
+
+    pid = payload.get("pid")
+    if not isinstance(pid, int):
+        return False
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        # Процесс есть, просто чужой. Живой — значит замок настоящий.
+        return False
+    return False
+
+
 def _try_acquire(conn: sqlite3.Connection) -> bool:
     """Take the lock, or take it over if the current one has expired.
 
@@ -105,13 +134,17 @@ def _try_acquire(conn: sqlite3.Connection) -> bool:
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (LOCK_KEY,)).fetchone()
         payload = _parse(row)
 
-        if row is not None and not _is_expired(payload):
+        gone = _holder_is_gone(payload)
+        if row is not None and not _is_expired(payload) and not gone:
             return False
 
         if row is not None:
             log.warning(
-                "блокировка предыдущего тика протухла и перехвачена",
-                extra={"previous": payload},
+                "блокировка предыдущего тика перехвачена",
+                extra={
+                    "previous": payload,
+                    "reason": "процесс мёртв" if gone else "срок истёк",
+                },
             )
 
         _store(conn, _payload(expires_at))

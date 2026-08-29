@@ -10,7 +10,7 @@ from tests.conftest import insert_post, insert_project, insert_topic
 
 # Версия поднимается осознанно при каждой новой миграции. Литерал, а не
 # вычисление из каталога: иначе тест сравнивал бы схему сам с собой.
-EXPECTED_SCHEMA_VERSION = 9
+EXPECTED_SCHEMA_VERSION = 10
 
 EXPECTED_TABLES = {
     "projects",

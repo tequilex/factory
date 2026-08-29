@@ -201,6 +201,6 @@ def test_migration_that_orphans_rows_is_rolled_back(populated, tmp_path):
         db.migrate(conn, tmp_path)
 
     assert "нарушила связи" in str(excinfo.value)
-    assert db.schema_version(conn) == 9
+    assert db.schema_version(conn) == 10
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1

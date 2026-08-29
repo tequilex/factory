@@ -14,7 +14,7 @@ import pytest
 from factory.core import db, machine
 from factory.core.config import TelegramCfg
 from factory.core.decisions import Decision, apply
-from factory.core.models import Project, State
+from factory.core.models import Post, Project, State
 from factory.core.steps import handler_for
 from factory.core.clock import now_utc
 from factory.bot import review_bot
@@ -253,3 +253,38 @@ class TestWaitingIsNotAnEvent:
         assert pipeline["conn"].execute(
             "SELECT COUNT(*) FROM runs WHERE step = 'queued'"
         ).fetchone()[0] == 1
+
+
+class TestWaitingReasonIsVisible:
+    """Подпись состояния не объясняет, почему пост стоит.
+
+    «Рисуются картинки» выглядит как работа — и когда лимит ключа исчерпан
+    тоже. Поймано живьём: владелец смотрел на пост, видел «рисуются картинки» и
+    не понимал, почему картинок нет уже полчаса.
+    """
+
+    def test_the_reason_is_remembered(self, pipeline):
+        machine.record_wait(
+            pipeline["conn"],
+            Post.from_row(pipeline["conn"].execute(
+                "SELECT * FROM posts WHERE id = ?", (pipeline["post_id"],)).fetchone()),
+            "Исчерпан лимит расходов ключа у провайдера картинок.",
+        )
+
+        row = pipeline["conn"].execute(
+            "SELECT waiting_reason FROM posts WHERE id = ?", (pipeline["post_id"],)
+        ).fetchone()
+        assert "лимит" in row["waiting_reason"]
+
+    def test_moving_on_clears_the_reason(self, pipeline):
+        """Пост сдвинулся — значит то, чего он ждал, случилось."""
+        post = Post.from_row(pipeline["conn"].execute(
+            "SELECT * FROM posts WHERE id = ?", (pipeline["post_id"],)).fetchone())
+        machine.record_wait(pipeline["conn"], post, "жду ключ")
+
+        machine.commit_transition(pipeline["conn"], post, State.TEXT_READY)
+
+        row = pipeline["conn"].execute(
+            "SELECT waiting_reason FROM posts WHERE id = ?", (pipeline["post_id"],)
+        ).fetchone()
+        assert row["waiting_reason"] is None

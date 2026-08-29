@@ -303,3 +303,55 @@ class TestHeartbeat:
 
         count = conn.execute("SELECT COUNT(*) FROM meta WHERE key = 'heartbeat'").fetchone()[0]
         assert count == 1
+
+
+class TestDeadHolder:
+    """Замок, оставшийся от убитого воркера, не должен держать систему полчаса.
+
+    Поймано живьём: тесты убили воркер, он не успел снять замок, и следующий
+    полчаса пропускал каждый тик. Посты стояли, картинки не дорисовывались, а в
+    логе была одна строка «работает другой процесс» — со стороны неотличимо от
+    зависшей системы.
+    """
+
+    def _put_lock(self, conn, *, pid, holder=None, minutes=30):
+        import json
+        import socket
+
+        from factory.core.clock import now_utc, to_iso
+
+        payload = json.dumps({
+            "holder": holder or socket.gethostname(),
+            "pid": pid,
+            "token": "чужой",
+            "expires_at": to_iso(now_utc() + timedelta(minutes=minutes)),
+        })
+        with db.write_transaction(conn):
+            conn.execute(
+                "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (lock.LOCK_KEY, payload, to_iso(now_utc())),
+            )
+
+    def test_a_lock_of_a_dead_process_is_taken(self, conn):
+        # Номер, которого заведомо нет: своих детей у теста столько не бывает.
+        self._put_lock(conn, pid=999_999)
+
+        with lock.tick_lock(conn) as acquired:
+            assert acquired is True
+
+    def test_a_lock_of_a_living_process_is_respected(self, conn):
+        """Иначе два воркера пойдут одновременно, и защита от дублей отключится."""
+        import os
+
+        self._put_lock(conn, pid=os.getpid())
+
+        with lock.tick_lock(conn) as acquired:
+            assert acquired is False
+
+    def test_a_lock_from_another_machine_waits_out_its_term(self, conn):
+        """Номера процессов на чужой машине ничего не значат."""
+        self._put_lock(conn, pid=999_999, holder="другая-машина")
+
+        with lock.tick_lock(conn) as acquired:
+            assert acquired is False

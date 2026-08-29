@@ -94,6 +94,16 @@ export default function Posts({ initial, onOpen, onToast }) {
                 <span className="hide-s muted">{when(post.created_at)}</span>
               </button>
 
+              {post.waiting_reason && post.state !== 'in_review' ? (
+                <div className="broken" style={{ background: 'var(--warn-bg)' }}>
+                  <div className="why">
+                    <span className="grow" style={{ font: '400 13px/1.5 var(--sans)', color: 'var(--warn-text)' }}>
+                      Стоит: {post.waiting_reason}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
               {post.state === 'failed' && post.last_error ? (
                 <div className="broken">
                   <div className="why">

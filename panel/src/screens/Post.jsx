@@ -176,7 +176,18 @@ export default function Post({ id, onBack, onToast }) {
             <Title post={post} onSaved={after} onFail={(message) => onToast(message, true)} />
           </div>
 
-          {post.factcheck_verdict && FACTCHECK[post.factcheck_verdict] ? (
+          {post.waiting_reason && post.state !== 'in_review' ? (
+        <div className="banner warn">
+          <div className="row top" style={{ gap: 10 }}>
+            <span className="dot warn" style={{ marginTop: 6 }} />
+            <span style={{ font: '400 13px/1.5 var(--sans)', color: 'var(--warn-text)' }}>
+              <b style={{ fontWeight: 600 }}>Пост стоит.</b> {post.waiting_reason}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {post.factcheck_verdict && FACTCHECK[post.factcheck_verdict] ? (
             <div className="banner warn">
               <div className="row top" style={{ gap: 10 }}>
                 <span className="dot warn" style={{ marginTop: 6 }} />

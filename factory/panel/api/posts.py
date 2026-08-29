@@ -55,6 +55,9 @@ class PostBrief(BaseModel):
     updated_at: str
     external_id: str | None
     last_error: str | None
+    #: Чего пост ждёт прямо сейчас. Подпись состояния этого не говорит: «рисуются
+    #: картинки» выглядит как работа, даже когда рисовать нечем.
+    waiting_reason: str | None
     has_cover: bool
 
 
@@ -102,6 +105,7 @@ def _brief(conn: sqlite3.Connection, row: sqlite3.Row) -> PostBrief:
         updated_at=row["updated_at"],
         external_id=row["external_id"],
         last_error=row["last_error"],
+        waiting_reason=row["waiting_reason"],
         has_cover=_on_disk(cover["local_path"]) if cover else False,
     )
 
