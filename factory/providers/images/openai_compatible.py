@@ -36,15 +36,9 @@ from factory.core import http, paths
 from factory.core.errors import ProviderError
 from factory.core.logging import get_logger
 from factory.core.retry import with_cost
-from factory.providers.base import IMAGE_HEIGHT, IMAGE_WIDTH
+from factory.providers.base import IMAGE_HEIGHT, IMAGE_WIDTH, is_spending_limit
 
 log = get_logger(__name__)
-
-#: Ответ провайдера про исчерпанный лимит ключа. Совпадение по подстроке, потому
-#: что код у него обычный 429 — тот же, что у «слишком часто стучитесь». Разница
-#: принципиальная: частоту переживёт повтор через минуту, а лимит не снимется
-#: сам никогда, и пять попыток просто израсходуют бюджет поста.
-_SPENDING_LIMIT_MARKS = ("spending limit", "лимит", "quota")
 
 
 class _Image(bytes):
@@ -73,11 +67,6 @@ def _advice(status: int, body: str, key_env: str) -> str:
     if 500 <= status < 600:
         return "Сбой на стороне провайдера. Система повторит позже сама."
     return f"Ответ провайдера: {body[:200]}"
-
-
-def _is_spending_limit(body: str) -> bool:
-    lowered = body.lower()
-    return any(mark in lowered for mark in _SPENDING_LIMIT_MARKS)
 
 
 def _fit(data: bytes, width: int, height: int) -> bytes:
@@ -238,7 +227,7 @@ class OpenAICompatibleImages:
 
     def _raise_for_status(self, response: httpx.Response) -> None:
         body = response.text
-        if response.status_code == 429 and _is_spending_limit(body):
+        if response.status_code == 429 and is_spending_limit(body):
             # Не ошибка сети и не «слишком часто»: месячный потолок ключа снимает
             # человек в личном кабинете. Ретраить это значит жечь попытки поста в
             # ожидании события, которое без владельца не наступит, — ровно то же

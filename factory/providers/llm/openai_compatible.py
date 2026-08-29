@@ -31,6 +31,7 @@ from factory.core import http, paths
 from factory.core.errors import ProviderError
 from factory.core.logging import get_logger
 from factory.core.retry import with_cost
+from factory.providers.base import is_spending_limit
 
 log = get_logger(__name__)
 
@@ -188,13 +189,7 @@ class OpenAICompatibleLLM:
             response = client.post(f"{self.base_url}/chat/completions", json=payload)
 
         if response.status_code != 200:
-            raise ProviderError(
-                f"Модель не ответила: код {response.status_code}.",
-                why=f"Модель {self.model}, адрес {self.base_url}.",
-                what_to_do=_advice(response.status_code, response.text, self.key_env),
-                status_code=response.status_code,
-                retry_after=_retry_after_header(response),
-            )
+            self._raise_for_status(response)
 
         try:
             data = response.json()
@@ -249,6 +244,33 @@ class OpenAICompatibleLLM:
             return with_cost(_Text(content), self._cost(usage))
 
         return self._parse(content, schema, usage)
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        body = response.text
+        if response.status_code == 429 and is_spending_limit(body):
+            # Не «слишком часто», а исчерпанный лимит ключа. По коду они
+            # неразличимы, по последствиям — нет: повтор через минуту вернёт
+            # тот же отказ, потому что снимает его человек в личном кабинете.
+            # Ретраи здесь сжигают попытки поста на событие, которое само не
+            # наступит, и пост умирает за час, пока владелец спит.
+            raise ProviderError(
+                "Исчерпан лимит расходов ключа у провайдера моделей.",
+                why=body.strip()[:200],
+                what_to_do=(
+                    "Подними месячный лимит ключа в личном кабинете провайдера "
+                    f"({self.base_url}) или заведи новый ключ и пропиши его в "
+                    f"{paths.env_file()}. Посты подождут, ничего не потеряется."
+                ),
+                needs_human=True,
+            )
+
+        raise ProviderError(
+            f"Модель не ответила: код {response.status_code}.",
+            why=f"Модель {self.model}, адрес {self.base_url}.",
+            what_to_do=_advice(response.status_code, body, self.key_env),
+            status_code=response.status_code,
+            retry_after=_retry_after_header(response),
+        )
 
     def _parse(self, content: str, schema: type[BaseModel], usage: dict) -> BaseModel:
         # Ответ уже оплачен. Если он не разберётся, цену всё равно надо донести

@@ -86,6 +86,47 @@ def provider(recorder, monkeypatch, **kwargs):
     )
 
 
+class TestSpendingLimit:
+    """Исчерпанный лимит ключа приходит обычным 429 — и это ловушка.
+
+    По коду он неотличим от «слишком часто стучитесь», но повтором не лечится:
+    потолок снимает человек в личном кабинете. Найдено на локальном прогоне уже
+    после того, как та же защита была поставлена картинкам: ключ у текста и у
+    картинок один, а разбирался отказ только в одном месте из двух.
+    """
+
+    RESPONSE = httpx.Response(
+        429, text="API key monthly spending limit exceeded: 80,14 руб. / 80,00 руб."
+    )
+
+    def test_it_waits_for_a_human_instead_of_retrying(self, monkeypatch):
+        recorder = Recorder(self.RESPONSE)
+
+        with pytest.raises(ProviderError) as exc:
+            provider(recorder, monkeypatch).complete("система", "запрос")
+
+        assert exc.value.needs_human is True
+        assert not _is_retryable(exc.value)
+
+    def test_it_says_where_the_limit_is_raised(self, monkeypatch):
+        recorder = Recorder(self.RESPONSE)
+
+        with pytest.raises(ProviderError) as exc:
+            provider(recorder, monkeypatch).complete("система", "запрос")
+
+        assert "личном кабинете" in str(exc.value)
+
+    def test_ordinary_rate_limit_is_still_retried(self, monkeypatch):
+        """Лечится одно — не должно ломаться другое."""
+        recorder = Recorder(httpx.Response(429, text="Too many requests"))
+
+        with pytest.raises(ProviderError) as exc:
+            provider(recorder, monkeypatch).complete("система", "запрос")
+
+        assert getattr(exc.value, "needs_human", False) is False
+        assert _is_retryable(exc.value)
+
+
 class TestRequest:
     def test_goes_to_the_configured_address(self, monkeypatch):
         recorder = Recorder()

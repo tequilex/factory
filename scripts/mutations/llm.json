@@ -63,12 +63,12 @@
       "        if False:"
     ],
     "не доносить код ответа до механизма повторов": [
-      "                status_code=response.status_code,",
-      "                status_code=None,"
+      "            status_code=response.status_code,",
+      "            status_code=None,"
     ],
     "не доносить Retry-After": [
-      "                retry_after=_retry_after_header(response),",
-      "                retry_after=None,"
+      "            retry_after=_retry_after_header(response),",
+      "            retry_after=None,"
     ],
     "терять стоимость неразобранного ответа": [
       "        spent = self._cost(usage)",
@@ -77,6 +77,14 @@
     "не доносить цену пустого ответа": [
       "                cost=self._cost(usage),",
       "                cost=None,"
+    ],
+    "считать исчерпанный лимит ключа обычной перегрузкой": [
+      "        if response.status_code == 429 and is_spending_limit(body):",
+      "        if False:"
+    ],
+    "объявить любой 429 требующим человека": [
+      "        if response.status_code == 429 and is_spending_limit(body):",
+      "        if response.status_code == 429:"
     ]
   }
 }
