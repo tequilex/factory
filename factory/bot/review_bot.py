@@ -172,14 +172,18 @@ def _looks_like_a_vk_key(message: Message) -> bool:
     return extract_vk_token(message.text or "") is not None
 
 
-def _not_a_vk_key(message: Message) -> bool:
-    """Обратное к :func:`_looks_like_a_vk_key`.
+def _not_a_vk_secret(message: Message) -> bool:
+    """Ни ключ, ни код ВК — значит обычное сообщение.
 
     Отдельной функцией, а не через `~`: обычную функцию aiogram принимает как
     фильтр, но отрицать её оператором нельзя — это работает только с его
     собственными объектами.
+
+    Код здесь так же важен, как ключ. Без него сообщение с кодом доезжало до
+    обработчика тем, и владелец получал «Добавить 1 тему в очередь?» со ссылкой
+    ВК вместо обновления ключа — а сам ключ так и оставался протухшим.
     """
-    return not _looks_like_a_vk_key(message)
+    return not _looks_like_a_vk_key(message) and not _looks_like_a_vk_code(message)
 
 
 def _projects() -> dict[str, ProjectConfig]:
@@ -290,12 +294,23 @@ def build_dispatcher(
         """
         await _accept_vk_token(conn, current(), message)
 
+    @dispatcher.message(_looks_like_a_vk_code)
+    async def on_vk_code(message: Message) -> None:
+        """Одноразовый код ВК — так же рано, как и ключ, и по той же причине.
+
+        Обработчик существовал, а зарегистрирован не был: код доезжал до
+        обработчика тем, и владелец получал «Добавить 1 тему в очередь?» со
+        ссылкой ВК внутри. Ключ при этом оставался протухшим, публикация
+        стояла, а на вид всё работало — бот ведь ответил.
+        """
+        await _accept_vk_code(conn, current(), message)
+
     @dispatcher.message(F.reply_to_message)
     async def on_edit(message: Message) -> None:
         """Ответ на сообщение поста — это исправленный текст."""
         await _accept_edit(conn, current(), message)
 
-    @dispatcher.message(F.text & ~F.text.startswith("/"), _not_a_vk_key)
+    @dispatcher.message(F.text & ~F.text.startswith("/"), _not_a_vk_secret)
     async def on_topics_offer(message: Message) -> None:
         """Обычное сообщение — это, скорее всего, список тем.
 
@@ -359,113 +374,6 @@ def build_dispatcher(
         return True
 
     return dispatcher
-
-
-async def _accept_vk_code(
-    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
-) -> None:
-    from factory.core import vk_auth
-
-    mine = _mine(projects, message.from_user.id)
-    if not mine:
-        await message.answer(_no_access(projects))
-        return
-
-    code = vk_auth.extract_code(message.text or "")
-    if code is None:
-        return
-
-    await _forget(message)
-
-    slug, project = mine[0]
-    if not (project.vk.app_id and project.vk.app_secret_env):
-        await message.answer(
-            f"У проекта [{slug}] не заданы vk.app_id и vk.app_secret_env — "
-            "обменять код не на что. Пришлите готовый ключ либо добавьте их в "
-            "конфиг."
-        )
-        return
-
-    try:
-        secret = resolve_secret(project.vk.app_secret_env, context="приложения ВК")
-        token = vk_auth.exchange(
-            code,
-            app_id=project.vk.app_id,
-            secret=secret,
-            proxy_env=project.vk.proxy_env,
-        )
-    except FactoryError as exc:
-        await message.answer(str(exc))
-        return
-
-    await _store_vk_token(conn, mine, token, message, by_code=True)
-
-
-async def _store_vk_token(
-    conn: sqlite3.Connection,
-    mine: list[tuple[str, ProjectConfig]],
-    token: str,
-    message: Message,
-    *,
-    by_code: bool = False,
-) -> None:
-    """Записать ключ в секреты и снять тревогу. Общее для обеих схем."""
-    updated: list[str] = []
-    for slug, project in mine:
-        name = project.vk.upload_token_env
-        if not name:
-            await message.answer(f"У проекта [{slug}] не задано поле vk.upload_token_env.")
-            continue
-        try:
-            secrets.update_secret(name, token)
-        except FactoryError as exc:
-            await message.answer(str(exc))
-            return
-        alerts.clear(conn, "vk_token", slug)
-        updated.append(name)
-        log.info("ключ ВК обновлён владельцем", extra={"slug": slug, "name": name})
-
-    if not updated:
-        return
-
-    how = (
-        "Ключ выписан на мой адрес — значит будет работать, откуда бы вы его ни "
-        "обновляли."
-        if by_code
-        else "Ваше сообщение я удалил."
-    )
-    await message.answer(
-        f"Ключ принят и сохранён ({', '.join(sorted(set(updated)))}).\n{how}\n\n"
-        "Публикация продолжится сама в ближайшую минуту — перезапускать ничего "
-        "не нужно."
-    )
-
-
-async def _accept_vk_token(
-    conn: sqlite3.Connection, projects: dict[str, ProjectConfig], message: Message
-) -> None:
-    mine = [
-        (slug, project)
-        for slug, project in projects.items()
-        if project.telegram and message.from_user.id in project.telegram.reviewers
-    ]
-    if not mine:
-        await message.answer(_no_access(projects))
-        return
-
-    token = extract_vk_token(message.text or "")
-    if token is None:
-        await message.answer(
-            "В сообщении нет ключа. Нужен весь адрес из строки браузера — "
-            "тот, что начинается на https://oauth.vk.ru/blank.html#access_token=..."
-        )
-        return
-
-    # Сообщение с ключом убирается из переписки сразу. Ключ даёт доступ к
-    # сообществу; висеть в истории он не должен.
-    await _forget(message)
-
-    await _store_vk_token(conn, mine, token, message)
 
 
 async def _accept_vk_code(

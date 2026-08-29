@@ -194,6 +194,22 @@
     "объяснять конфигом обычный отказ по правам": [
       "    if not projects:\n        return NO_CONFIG",
       "    if True:\n        return NO_CONFIG"
+    ],
+    "не подключать обработчик кода ВК": [
+      "    @dispatcher.message(_looks_like_a_vk_code)",
+      "    @dispatcher.message(lambda m: False)"
+    ],
+    "пускать код ВК в темы": [
+      "    return not _looks_like_a_vk_key(message) and not _looks_like_a_vk_code(message)",
+      "    return not _looks_like_a_vk_key(message)"
+    ],
+    "ловить код позже правки текста": [
+      "    @dispatcher.message(_looks_like_a_vk_code)\n    async def on_vk_code(message: Message) -> None:",
+      "    @dispatcher.message(F.reply_to_message)\n    async def on_edit_first(message: Message) -> None:\n        await _accept_edit(conn, current(), message)\n\n    @dispatcher.message(_looks_like_a_vk_code)\n    async def on_vk_code(message: Message) -> None:"
+    ],
+    "ловить ключ позже правки текста": [
+      "    @dispatcher.message(_looks_like_a_vk_key)\n    async def on_vk_token(message: Message) -> None:",
+      "    @dispatcher.message(F.reply_to_message)\n    async def on_edit_first(message: Message) -> None:\n        await _accept_edit(conn, current(), message)\n\n    @dispatcher.message(_looks_like_a_vk_key)\n    async def on_vk_token(message: Message) -> None:"
     ]
   }
 }

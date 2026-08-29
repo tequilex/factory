@@ -26,12 +26,40 @@ class FakeMessage:
     text: str = ""
     from_user: object = None
     message_id: int = 900
+    reply_to_message: object = None
     answered: list[str] = field(default_factory=list)
     markups: list[object] = field(default_factory=list)
 
     async def answer(self, text: str, reply_markup=None) -> None:
         self.answered.append(text)
         self.markups.append(reply_markup)
+
+
+def routed_to(dispatcher, message) -> str | None:
+    """Кто из обработчиков возьмёт сообщение первым.
+
+    Повторяет выбор aiogram: обработчики перебираются в порядке регистрации,
+    берётся первый, у которого прошли все фильтры.
+
+    Проверять надо именно это, а не наличие обработчика в списке. Тест «функция
+    зарегистрирована» переживает и подмену фильтра на «никогда», и вставку
+    чужого обработчика перед нужным — обе поломки означают, что сообщение уедет
+    не туда, а тест остаётся зелёным.
+    """
+
+    async def resolve():
+        for handler in dispatcher.message.handlers:
+            for flt in handler.filters or []:
+                # bot=None нужен фильтру команд: он принимает его аргументом,
+                # но обращается к нему только для разбора «/команда@имя_бота»,
+                # а сюда такие сообщения не доходят.
+                if not await flt.call(message, bot=None):
+                    break
+            else:
+                return getattr(handler.callback, "__name__", None)
+        return None
+
+    return asyncio.run(resolve())
 
 
 @pytest.fixture
@@ -334,9 +362,9 @@ class TestRetryFromTheBot:
 
 
 class TestTheKeyAlwaysReachesTheRightHandler:
-    """Ключ ВК не должен попадать ни в темы, ни в правку текста.
+    """Ключ и код ВК не должны попадать ни в темы, ни в правку текста.
 
-    Оба промаха неприятны одинаково: ключ не сохраняется, остаётся висеть в
+    Промахи неприятны одинаково: ключ не сохраняется, остаётся висеть в
     переписке, а владелец видит бессмысленный ответ вместо продолжения работы.
     """
 
@@ -345,7 +373,74 @@ class TestTheKeyAlwaysReachesTheRightHandler:
         message = FakeMessage(text="vk1.a.qwertyuiop1234567890AB", from_user=FakeUser(OWNER))
 
         assert review_bot._looks_like_a_vk_key(message) is True
-        assert review_bot._not_a_vk_key(message) is False
+        assert review_bot._not_a_vk_secret(message) is False
+
+    def test_a_code_is_not_taken_for_topics(self, bot):
+        """Поймано живьём: код уехал в темы, и бот предложил его добавить.
+
+        Ключ при этом остался протухшим, публикация стояла, а на вид всё
+        работало — бот ведь ответил. Обработчик кода существовал, но не был
+        зарегистрирован ни на один фильтр.
+        """
+        message = FakeMessage(
+            text="https://oauth.vk.ru/blank.html#code=4b59a4fb40ab1805e3",
+            from_user=FakeUser(OWNER),
+        )
+
+        assert review_bot._looks_like_a_vk_code(message) is True
+        assert review_bot._not_a_vk_secret(message) is False
+
+    def test_a_bare_code_is_recognised_too(self, bot):
+        """С телефона копируют по-разному: и весь адрес, и один код."""
+        message = FakeMessage(text="4b59a4fb40ab1805e3", from_user=FakeUser(OWNER))
+
+        assert review_bot._looks_like_a_vk_code(message) is True
+
+    def test_a_topic_list_is_not_mistaken_for_a_code(self, bot):
+        message = FakeMessage(text="Первая тема\nВторая тема", from_user=FakeUser(OWNER))
+
+        assert review_bot._looks_like_a_vk_code(message) is False
+        assert review_bot._not_a_vk_secret(message) is True
+
+    def test_a_code_reaches_the_code_handler(self, bot):
+        """Написанный, но не подключённый обработчик — то же, что его отсутствие.
+
+        Проверяется маршрутизация целиком: какой обработчик реально возьмёт
+        сообщение. Именно так эта поломка и выглядела снаружи — обработчик в
+        коде был, а код уезжал в темы.
+        """
+        message = FakeMessage(
+            text="https://oauth.vk.ru/blank.html#code=4b59a4fb40ab1805e3",
+            from_user=FakeUser(OWNER),
+        )
+
+        assert routed_to(bot["dispatcher"], message) == "on_vk_code"
+
+    def test_a_code_sent_as_a_reply_still_reaches_the_code_handler(self, bot):
+        """Самое естественное действие в телефоне — ответить туда, где ссылка.
+
+        Ответ на сообщение по умолчанию считается правкой текста поста. Код,
+        присланный ответом, обязан всё равно уйти в обновление ключа.
+        """
+        message = FakeMessage(
+            text="https://oauth.vk.ru/blank.html#code=4b59a4fb40ab1805e3",
+            from_user=FakeUser(OWNER),
+            reply_to_message=object(),
+        )
+
+        assert routed_to(bot["dispatcher"], message) == "on_vk_code"
+
+    def test_a_key_reaches_the_key_handler(self, bot):
+        message = FakeMessage(
+            text="vk1.a.qwertyuiop1234567890AB", from_user=FakeUser(OWNER)
+        )
+
+        assert routed_to(bot["dispatcher"], message) == "on_vk_token"
+
+    def test_a_topic_list_reaches_the_topics_handler(self, bot):
+        message = FakeMessage(text="Первая тема\nВторая тема", from_user=FakeUser(OWNER))
+
+        assert routed_to(bot["dispatcher"], message) == "on_topics_offer"
 
     def test_a_whole_address_is_recognised(self, bot):
         message = FakeMessage(
@@ -360,20 +455,23 @@ class TestTheKeyAlwaysReachesTheRightHandler:
 
         assert review_bot._looks_like_a_vk_key(message) is False
 
-    def test_the_key_handler_is_registered_before_the_others(self, bot):
-        """aiogram берёт первый подошедший обработчик.
+    def test_a_key_sent_as_a_reply_still_reaches_the_key_handler(self, bot):
+        """Ключ, присланный ответом на сообщение с тревогой, — обычное дело.
 
-        Ключ, присланный ответом на сообщение с тревогой (самое естественное
-        действие в телефоне — ответить туда, где ссылка), иначе уходит в правку
-        текста.
+        Ответить туда, где ссылка, — самое естественное действие в телефоне. По
+        умолчанию ответ считается правкой текста поста, и без правильного
+        порядка обработчиков ключ уходил бы туда.
+
+        Проверяется маршрутизацией, а не порядком имён в списке: проверка по
+        именам переживает вставку чужого обработчика перед нужным.
         """
-        names = [
-            getattr(handler.callback, "__name__", "")
-            for handler in bot["dispatcher"].message.handlers
-        ]
+        message = FakeMessage(
+            text="vk1.a.qwertyuiop1234567890AB",
+            from_user=FakeUser(OWNER),
+            reply_to_message=object(),
+        )
 
-        assert names.index("on_vk_token") < names.index("on_edit")
-        assert names.index("on_vk_token") < names.index("on_topics_offer")
+        assert routed_to(bot["dispatcher"], message) == "on_vk_token"
 
 
 class TestRetryClearsTheAlarm:
