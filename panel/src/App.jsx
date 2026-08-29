@@ -24,10 +24,30 @@ const NAV = [
 // На телефоне внизу помещается четыре пункта, остальное — за «Ещё».
 const PHONE = ['overview', 'posts', 'topics'];
 
+// Адрес экрана живёт в решётке, а не в пути. Причина простая: панель отдаёт
+// один файл, и по пути вроде /posts сервер вернул бы «не найдено» — пришлось
+// бы учить его отдавать index.html на любой адрес. С решёткой перезагрузка,
+// «назад» и ссылка на пост работают сами, и сервер об этом знать не обязан.
+function readHash() {
+  const raw = (window.location.hash || '').replace(/^#\/?/, '');
+  const [name = '', rest = ''] = raw.split('/');
+
+  if (name === 'post' && rest) return { name: 'post', params: { id: Number(rest) } };
+  if (name === 'posts') return { name: 'posts', params: rest ? { state: rest } : {} };
+  if (NAV.some(([code]) => code === name)) return { name, params: {} };
+  return { name: 'overview', params: {} };
+}
+
+function writeHash({ name, params }) {
+  if (name === 'post') return `#/post/${params.id}`;
+  if (name === 'posts' && params.state) return `#/posts/${params.state}`;
+  return `#/${name === 'overview' ? '' : name}`;
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [inside, setInside] = useState(false);
-  const [screen, setScreen] = useState({ name: 'overview', params: {} });
+  const [screen, setScreen] = useState(readHash);
   const [slug, setSlug] = useState(null);
   const [summary, setSummary] = useState(null);
   const [toast, setToast] = useState(null);
@@ -53,8 +73,24 @@ export default function App() {
     return () => clearInterval(timer);
   }, [inside, slug]);
 
+  // Кнопки «назад» и «вперёд» в браузере, перезагрузка страницы и ссылка,
+  // отправленная себе же, — всё это должно попадать на тот экран, который в
+  // адресе. Раньше перезагрузка всегда возвращала на обзор.
+  useEffect(() => {
+    const onHash = () => { setScreen(readHash()); setMore(false); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
   const go = useCallback((name, params = {}) => {
-    setScreen({ name, params });
+    const next = { name, params };
+    const hash = writeHash(next);
+    if (window.location.hash !== hash) {
+      // Меняем адрес — обработчик hashchange сам поставит экран.
+      window.location.hash = hash;
+    } else {
+      setScreen(next);
+    }
     setMore(false);
     window.scrollTo(0, 0);
   }, []);
@@ -70,7 +106,13 @@ export default function App() {
 
   const body = (() => {
     switch (screen.name) {
-      case 'post': return <Post id={screen.params.id} onBack={() => go('posts')} onToast={say} />;
+      case 'post': return (
+        <Post
+          id={screen.params.id}
+          onBack={() => (window.history.length > 1 ? window.history.back() : go('posts'))}
+          onToast={say}
+        />
+      );
       case 'posts': return <Posts initial={screen.params} onOpen={go} onToast={say} />;
       case 'topics': return slug ? <Topics slug={slug} onToast={say} /> : null;
       case 'spending': return <Spending />;
