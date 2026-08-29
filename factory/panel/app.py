@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from factory.core.errors import FactoryError
 from factory.core.logging import get_logger
 from factory.panel import auth
-from factory.panel.api import actions, content, media, overview, posts
+from factory.panel.api import actions, content, media, overview, posts, settings
 
 log = get_logger(__name__)
 
@@ -99,7 +99,8 @@ def create_app() -> FastAPI:
     # Забыть зависимость на одном обработчике — открыть данные наружу, и
     # заметить это можно будет только тем, что кто-то их прочитал.
     for router in (
-        overview.router, posts.router, content.router, actions.router, media.router
+        overview.router, posts.router, content.router,
+        actions.router, media.router, settings.router,
     ):
         app.include_router(router, dependencies=[Depends(require_session)])
 
